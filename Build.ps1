@@ -119,7 +119,8 @@ function Build-Installer {
 
     $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DSourcePath=`"$SourcePath`""
 
-    Start-Process -FilePath $innoSetupPath -ArgumentList $installerScript, $arguments -Wait
+    Start-Process -FilePath $innoSetupPath -ArgumentList $installerScript, $arguments -NoNewWindow -Wait
+
     Remove-Folder -FolderPath $SourcePath
 }
 
