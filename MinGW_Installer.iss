@@ -9,7 +9,7 @@
 #endif
 
 #ifndef SourcePath
-  #define SourcePath "C:\mingw64\*"
+  #exit
 #endif
 
 [Setup]
