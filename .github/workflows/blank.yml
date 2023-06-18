@@ -13,13 +13,10 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-            # Install PowerShell package manager (required for PowerShellGet module)
-            Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-            iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
-  
-            # Install the jq-like PowerShell module
-            Install-Module -Name PSJq -Force
-  
+          # Install PowerShell package manager (required for PowerShellGet module)
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
+
       - name: Check for new release
         shell: pwsh
         run: |
