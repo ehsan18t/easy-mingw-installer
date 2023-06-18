@@ -1,3 +1,10 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$arch,
+
+    [Parameter(Mandatory = $true)]
+    [string]$namePattern
+)
 
 $currentDirectory = $PWD.Path
 
@@ -131,7 +138,7 @@ $owner = "brechtsanders"
 $repo = "winlibs_mingw"
 
 # Set the regular expression pattern for the varying portion of the file name
-$pattern = "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+$pattern = $namePattern
 $versionRegex = "(?<=gcc-)\d+\.\d+\.\d+"
 
 # Get the latest release information
@@ -156,7 +163,7 @@ if ($selectedAsset) {
     # Extract the downloaded file
     $unzipDestination = $PSScriptRoot
     Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
-    $extractedFolderPath = "\mingw64\*"
+    $extractedFolderPath = "\mingw$arch\*"
 
     # Set the SourcePath for Inno Setup
     $sourcePath = Join-Path -Path $currentDirectory -ChildPath $extractedFolderPath
