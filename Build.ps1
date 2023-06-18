@@ -10,7 +10,7 @@ function Download-File {
         [string]$FileName
     )
 
-    Write-Output " -> Downloading $FileName..."
+    Write-Host " -> Downloading $FileName..."
 
     $uri = New-Object "System.Uri" "$Url"
     $request = [System.Net.HttpWebRequest]::Create($uri)
@@ -43,7 +43,7 @@ function Download-File {
     $targetStream.Dispose()
     $responseStream.Dispose()
 
-    Write-Output "`n -> Download completed."
+    Write-Host "`n -> Download completed."
 }
 
 
@@ -59,11 +59,11 @@ function Extract-7z {
 
     $7zExe = "C:\Program Files\7-Zip\7z.exe"
     if (-not (Test-Path $7zExe)) {
-        Write-Host "7-Zip executable not found at '$7zExe'. Please make sure 7-Zip is installed or update the path to the 7z.exe file."
+        Write-Host " -> ERROR: 7-Zip executable not found at '$7zExe'. Please make sure 7-Zip is installed or update the path to the 7z.exe file."
         return
     }
 
-    Write-Output " -> Extracting $ArchivePath"
+    Write-Host " -> Extracting $ArchivePath"
 
     $arguments = "x `"$ArchivePath`" -o`"$DestinationPath`" -y"
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -78,9 +78,9 @@ function Extract-7z {
     $process.WaitForExit()
 
     if ($process.ExitCode -eq 0) {
-        Write-Host "Extraction completed."
+        Write-Host " -> Extraction completed."
     } else {
-        Write-Host "Error occurred during extraction."
+        Write-Host " -> ERROR: Error occurred during extraction."
     }
 }
 
@@ -96,7 +96,7 @@ function Remove-Folder {
         Remove-Item -Path $FolderPath -Recurse -Force
         Write-Host " -> Removed '$FolderPath'"
     } else {
-        Write-Host "Folder '$FolderPath' not found."
+        Write-Host " -> ERROR: Folder '$FolderPath' not found."
     }
 }
 
@@ -108,11 +108,11 @@ function Build-Installer {
     )
 
     if (-NOT (Test-Path $SourcePath)) {
-        Write-Output " -> Builing $Name Failed!"
+        Write-Host " -> Builing $Name Failed!"
         Exit 1
     }
 
-    Write-Output " -> Builing $Name. Path: $SourcePath"
+    Write-Host " -> Builing $Name. Path: $SourcePath"
 
     $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
     $installerScript = "MinGW_Installer.iss"
@@ -165,5 +165,5 @@ if ($selectedAsset) {
     # Build the installer
     Build-Installer -Name $name -Version $version -SourcePath $sourcePath
 } else {
-    Write-Host "No asset matching the pattern was found."
+    Write-Host " -> ERROR: No asset matching the pattern was found."
 }
