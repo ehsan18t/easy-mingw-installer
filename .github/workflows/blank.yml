@@ -34,6 +34,7 @@ jobs:
           }
           else {
             Write-Host "No new release available"
+            .\run.bat
           }
 
       - name: Upload Exe Files
