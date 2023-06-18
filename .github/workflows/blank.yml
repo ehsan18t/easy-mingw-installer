@@ -11,16 +11,6 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Check Release Keyword
-        id: keyword-check
-        run: |
-          keyword="MSVCRT"
-          if [[ ${{ github.event_name }} == 'release' && ${{ github.event.action }} == 'published' ]]; then
-            if [[ $(echo "${{ github.event.release.body }}" | grep -q "$keyword")$? -eq 0 ]]; then
-              echo "Release contains the keyword. Aborting."
-              exit 0
-            fi
-          fi
       - name: Install dependencies
         run: |
             # Install PowerShell package manager (required for PowerShellGet module)
