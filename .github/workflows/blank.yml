@@ -30,11 +30,11 @@ jobs:
 
           if ($latestReleaseDate -gt $currentReleaseDate) {
             Write-Host "New release available: $($latestRelease.tag_name)"
-            & ((Split-Path $MyInvocation.InvocationName) + "\Build.ps1") -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+            & ${{ github.workspace }}/Build.ps1 -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
           }
           else {
             Write-Host "No new release available"
-            & "$PSScriptRoot\Build.ps1" -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+            & ${{ github.workspace }}/Build.ps1 -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
           }
 
       - name: Upload Exe Files
