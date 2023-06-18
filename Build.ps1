@@ -126,7 +126,7 @@ function Build-Installer {
     $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
     $installerScript = "MinGW_Installer.iss"
 
-    $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DSourcePath=`"$SourcePath`""
+    $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DArch=`"$arch`" /DSourcePath=`"$SourcePath`""
 
     Start-Process -FilePath $innoSetupPath -ArgumentList $installerScript, $arguments -NoNewWindow -Wait
 
