@@ -26,15 +26,15 @@ jobs:
           $latestReleaseUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
           $latestRelease = Invoke-RestMethod -Uri $latestReleaseUrl
           $latestReleaseDate = [datetime]::Parse($latestRelease.published_at)
-          $currentReleaseDate = [datetime]::Now.AddDays(-1)
+          $currentReleaseDate = [datetime]::Now.AddDays(-15)
 
           if ($latestReleaseDate -gt $currentReleaseDate) {
             Write-Host "New release available: $($latestRelease.tag_name)"
-            Start-Process -FilePath "run.bat" -Wait
+            Invoke-Expression -Command "run.bat"
           }
           else {
             Write-Host "No new release available"
-            Start-Process -FilePath "run.bat" -Wait
+            Invoke-Expression -Command "run.bat"
           }
 
       - name: Upload Exe Files
