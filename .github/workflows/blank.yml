@@ -1,0 +1,56 @@
+name: Run Windows 22 Script on Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check Release Keyword
+        id: keyword-check
+        run: |
+          keyword="MSVCRT"
+          if [[ ${{ github.event_name }} == 'release' && ${{ github.event.action }} == 'published' ]]; then
+            if [[ $(echo "${{ github.event.release.body }}" | grep -q "$keyword")$? -eq 0 ]]; then
+              echo "Release contains the keyword. Aborting."
+              exit 0
+            fi
+          fi
+      - name: Install dependencies
+        run: |
+            # Install PowerShell package manager (required for PowerShellGet module)
+            Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+            iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
+  
+            # Install the jq-like PowerShell module
+            Install-Module -Name PSJq -Force
+  
+      - name: Check for new release
+        shell: pwsh
+        run: |
+          $owner = "brechtsanders"
+          $repo = "winlibs_mingw"
+
+          $latestReleaseUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
+          $latestRelease = Invoke-RestMethod -Uri $latestReleaseUrl -Headers @{ "Authorization" = "Bearer $env:GITHUB_TOKEN" }
+          $latestReleaseDate = [datetime]::Parse($latestRelease.published_at)
+          $currentReleaseDate = [datetime]::Now.AddDays(-1)
+
+          if ($latestReleaseDate -gt $currentReleaseDate) {
+            Write-Host "New release available: $($latestRelease.tag_name)"
+            .\run.bat
+          }
+          else {
+            Write-Host "No new release available"
+          }
+
+      - name: Upload Exe Files
+        uses: actions/upload-artifact@v2
+        with:
+          name: Output Files
+          path: ./Output
