@@ -30,7 +30,14 @@ jobs:
 
           if ($latestReleaseDate -gt $currentReleaseDate) {
             Write-Host "New release available: $($latestRelease.tag_name)"
-            & "$PSScriptRoot\Build.ps1" -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+            Param(
+                [Parameter( Mandatory = $true)]
+                $arch = "64",
+                [Parameter( Mandatory = $true)]
+                $namePattern = "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+            )
+            
+            & ((Split-Path $MyInvocation.InvocationName) + "\Build.ps1") -arch $arch -namePattern $namePattern
           }
           else {
             Write-Host "No new release available"
