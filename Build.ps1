@@ -35,7 +35,7 @@ function Download-File {
         $downloadedBytes += $count
 
         [System.Console]::CursorLeft = 0
-        [System.Console]::Write("  >>   Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
+        [System.Console]::Write("  >> Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
     }
 
     $targetStream.Flush()
@@ -79,7 +79,8 @@ function Extract-7z {
 
     if ($process.ExitCode -eq 0) {
         Write-Host " -> Extraction completed."
-    } else {
+    }
+    else {
         Write-Host " -> ERROR: Error occurred during extraction."
     }
 }
@@ -95,7 +96,8 @@ function Remove-Folder {
         # Remove the folder and its contents recursively
         Remove-Item -Path $FolderPath -Recurse -Force
         Write-Host " -> Removed '$FolderPath'"
-    } else {
+    }
+    else {
         Write-Host " -> ERROR: Folder '$FolderPath' not found."
     }
 }
@@ -165,6 +167,7 @@ if ($selectedAsset) {
 
     # Build the installer
     Build-Installer -Name $name -Version $version -SourcePath $sourcePath
-} else {
+}
+else {
     Write-Host " -> ERROR: No asset matching the pattern was found."
 }
