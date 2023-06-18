@@ -30,11 +30,11 @@ jobs:
 
           if ($latestReleaseDate -gt $currentReleaseDate) {
             Write-Host "New release available: $($latestRelease.tag_name)"
-            .\run.bat
+            cmd /c run.bat
           }
           else {
             Write-Host "No new release available"
-            .\run.bat
+            cmd /c run.bat
           }
 
       - name: Upload Exe Files
