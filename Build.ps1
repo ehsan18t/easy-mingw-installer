@@ -12,52 +12,41 @@ function Download-File {
 
     Write-Output " -> Downloading $FileName..."
 
-    $webRequest = [System.Net.WebRequest]::Create($Url)
-    $webRequest.UseDefaultCredentials = $true
-    $webRequest.Proxy = [System.Net.WebRequest]::DefaultWebProxy
-    $webRequest.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+    $uri = New-Object "System.Uri" "$Url"
+    $request = [System.Net.HttpWebRequest]::Create($uri)
+    $request.Timeout = 15000
 
-    $webResponse = $webRequest.GetResponse()
-    $contentLength = [System.Convert]::ToInt64($webResponse.Headers.Get("Content-Length"))
+    $response = $request.GetResponse()
+    $totalLength = [System.Math]::Floor($response.ContentLength / 1024)
+    $responseStream = $response.GetResponseStream()
 
-    $bufferSize = 8192
-    $buffer = New-Object byte[] $bufferSize
+    $targetStream = New-Object -TypeName System.IO.FileStream -ArgumentList $FileName, 'Create'
+    $buffer = New-Object byte[] 10KB
+    $downloadedBytes = 0
 
-    $fileStream = [System.IO.File]::Create($FileName)
+    while ($true) {
+        $count = $responseStream.Read($buffer, 0, $buffer.Length)
 
-    $responseStream = $webResponse.GetResponseStream()
-
-    $progress = 0
-    $totalBytesRead = 0
-    $timer = [System.Diagnostics.Stopwatch]::StartNew()
-
-    while ($progress -lt 100) {
-        $bytesRead = $responseStream.Read($buffer, 0, $bufferSize)
-        if ($bytesRead -eq 0) {
+        if ($count -eq 0) {
             break
         }
 
-        $fileStream.Write($buffer, 0, $bytesRead)
+        $targetStream.Write($buffer, 0, $count)
+        $downloadedBytes += $count
 
-        $totalBytesRead += $bytesRead
-        $progress = $totalBytesRead / $contentLength * 100
-
-        $elapsedTime = $timer.Elapsed.TotalSeconds
-        if ($elapsedTime -gt 0) {
-            $speed = $totalBytesRead / $elapsedTime
-        } else {
-            $speed = 0
-        }
-
-        Write-Progress -Activity "Downloading" -Status "Progress: $([math]::Round($progress, 2))%  Speed: $([math]::Round($speed / 1024, 2)) KB/s" -PercentComplete $progress
+        [System.Console]::CursorLeft = 0
+        [System.Console]::Write("  >>   Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
     }
 
-    $fileStream.Dispose()
+    $targetStream.Flush()
+    $targetStream.Close()
+    $targetStream.Dispose()
     $responseStream.Dispose()
-    $webResponse.Dispose()
 
-    Write-Progress -Activity "Downloading" -Status "Completed" -Completed
+    Write-Output "`n -> Download completed."
 }
+
+
 
 function Extract-7z {
     param (
