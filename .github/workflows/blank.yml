@@ -24,7 +24,7 @@ jobs:
           $repo = "winlibs_mingw"
 
           $latestReleaseUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-          $latestRelease = Invoke-RestMethod -Uri $latestReleaseUrl -Headers @{ "Authorization" = "Bearer $env:GITHUB_TOKEN" }
+          $latestRelease = Invoke-RestMethod -Uri $latestReleaseUrl
           $latestReleaseDate = [datetime]::Parse($latestRelease.published_at)
           $currentReleaseDate = [datetime]::Now.AddDays(-1)
 
