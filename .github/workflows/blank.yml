@@ -1,4 +1,4 @@
-name: Run Windows 22 Script on Release
+name: Run Windows Script on Release
 
 on:
   release:
@@ -11,10 +11,13 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
       - name: Build
-        working-directory: ${{ github.workspace }}
         run: |
-          Start-Process -FilePath "./run.bat" -Wait -NoNewWindow
+          Start-Process -FilePath ".\run.bat" -Wait -NoNewWindow
+          
       - name: Upload Exe Files
         uses: actions/upload-artifact@v2
         with:
