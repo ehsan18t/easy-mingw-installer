@@ -18,24 +18,8 @@ jobs:
           iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
 
       - name: Check for new release
-        shell: pwsh
         run: |
-          $owner = "brechtsanders"
-          $repo = "winlibs_mingw"
-
-          $latestReleaseUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-          $latestRelease = Invoke-RestMethod -Uri $latestReleaseUrl
-          $latestReleaseDate = [datetime]::Parse($latestRelease.published_at)
-          $currentReleaseDate = [datetime]::Now.AddDays(-15)
-
-          if ($latestReleaseDate -gt $currentReleaseDate) {
-            Write-Host "New release available: $($latestRelease.tag_name)"
-            & D:\a\easy-mingw-installer\easy-mingw-installer\Build.ps1 -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
-          }
-          else {
-            Write-Host "No new release available"
-            & ${{ github.workspace }}/Build.ps1 -arch "64" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
-          }
+          .\run.bat
 
       - name: Upload Exe Files
         uses: actions/upload-artifact@v2
