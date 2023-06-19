@@ -12,6 +12,7 @@ jobs:
 
     steps:
       - name: Build
+        working-directory: ./
         run: |
           Start-Process -FilePath "./run.bat" -Wait -NoNewWindow
       - name: Upload Exe Files
