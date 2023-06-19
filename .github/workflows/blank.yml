@@ -1,10 +1,9 @@
 name: Run Windows Script on Release
 
 on:
-  release:
-    types:
-      - published
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -14,19 +13,45 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v2
 
-      - name: Install dependencies
-        run: |
-          # Install PowerShell package manager (required for PowerShellGet module)
-          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-          iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
+      - name: Set Date Tag
+        id: date_tag
+        run: echo "RELEASE_TAG=$(date -u +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          release_name: Release ${{ env.RELEASE_TAG }}
+          draft: false
+          prerelease: false
+
+      # - name: Install dependencies
+      #   run: |
+      #     # Install PowerShell package manager (required for PowerShellGet module)
+      #     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+      #     iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
 
       - name: Build
-        shell: pwsh
+        # shell: pwsh
         run: |
           Start-Process -FilePath ".\run.bat" -Wait -NoNewWindow
-          
+
       - name: Upload Exe Files
+        id: upload_files
         uses: actions/upload-artifact@v2
         with:
           name: Output Files
           path: ./Output
+
+      - name: Attach Artifacts to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.upload_files.outputs.artifact_paths }}
+          asset_name: Output Files
+          asset_content_type: application/zip
