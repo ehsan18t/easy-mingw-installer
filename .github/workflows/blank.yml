@@ -19,14 +19,26 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
+        uses: actions/github-script@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          release_name: Release ${{ env.RELEASE_TAG }}
-          draft: false
-          prerelease: false
+          script: |
+            const dateTag = process.env.RELEASE_TAG;
+            const octokit = context.github;
+            const { owner, repo } = context.repo;
+            
+            const release = await octokit.repos.createRelease({
+              owner,
+              repo,
+              tag_name: dateTag,
+              name: `Release ${dateTag}`,
+              draft: false,
+              prerelease: false
+            });
+            
+            console.log(`Created release with tag: ${dateTag}`);
+            console.log(`Release ID: ${release.data.id}`);
 
       # - name: Install dependencies
       #   run: |
