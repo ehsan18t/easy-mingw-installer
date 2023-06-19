@@ -14,7 +14,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v2
 
+      - name: Install dependencies
+        run: |
+          # Install PowerShell package manager (required for PowerShellGet module)
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
+
       - name: Build
+        shell: pwsh
         run: |
           Start-Process -FilePath ".\run.bat" -Wait -NoNewWindow
           
