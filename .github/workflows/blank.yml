@@ -19,35 +19,27 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: actions/github-script@v5
+        uses: octokit/request-action@v2.x
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          script: |
-            const dateTag = process.env.RELEASE_TAG;
-            const octokit = context.github;
-            const { owner, repo } = context.repo;
-            
-            const release = await octokit.repos.createRelease({
-              owner,
-              repo,
-              tag_name: dateTag,
-              name: `Release ${dateTag}`,
-              draft: false,
-              prerelease: false
-            });
-            
-            console.log(`Created release with tag: ${dateTag}`);
-            console.log(`Release ID: ${release.data.id}`);
+          route: POST /repos/${{ github.repository }}/releases
+          body: |
+            {
+              "tag_name": "${{ env.RELEASE_TAG }}",
+              "name": "Release ${{ env.RELEASE_TAG }}",
+              "draft": false,
+              "prerelease": false
+            }
 
-      # - name: Install dependencies
-      #   run: |
-      #     # Install PowerShell package manager (required for PowerShellGet module)
-      #     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-      #     iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
+      - name: Install dependencies
+        run: |
+          # Install PowerShell package manager (required for PowerShellGet module)
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
 
       - name: Build
-        # shell: pwsh
+        shell: pwsh
         run: |
           Start-Process -FilePath ".\run.bat" -Wait -NoNewWindow
 
@@ -63,7 +55,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          upload_url: ${{ steps.create_release.outputs.data.upload_url }}
           asset_path: ${{ steps.upload_files.outputs.artifact_paths }}
           asset_name: Output Files
           asset_content_type: application/zip
