@@ -41,7 +41,6 @@ function Download-File {
         $targetStream.Write($buffer, 0, $count)
         $downloadedBytes += $count
 
-        [System.Console]::CursorLeft = 0
         [System.Console]::Write("  >> Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
     }
 
