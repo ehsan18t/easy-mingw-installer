@@ -11,16 +11,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Install dependencies
+      - name: Build
         run: |
-          # Install PowerShell package manager (required for PowerShellGet module)
-          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-          iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
-
-      - name: Check for new release
-        run: |
-          call run.bat
-
+          Start-Process -FilePath "./run.bat" -Wait -NoNewWindow
       - name: Upload Exe Files
         uses: actions/upload-artifact@v2
         with:
