@@ -18,8 +18,7 @@ jobs:
           iex "& { $(irm https://aka.ms/install-powershell.ps1 -UseBasic) }"
 
       - name: Check for new release
-        run: |
-          .\run.bat
+        run: .\run.bat
 
       - name: Upload Exe Files
         uses: actions/upload-artifact@v2
