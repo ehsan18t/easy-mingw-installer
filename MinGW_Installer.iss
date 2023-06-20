@@ -38,8 +38,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#SourcePath}"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[Tasks]
-Name: envPath; Description: "Add to PATH variable" 
+; [Tasks]
+; Name: envPath; Description: "Add to PATH variable" 
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
