@@ -19,7 +19,7 @@
 [Setup]
 AppId={{078C8544-DE40-43A5-B293-58408E30C089}
 AppName={#MyAppName}
-SetupIconFile="icon{#Arch}.ico"
+SetupIconFile="assets\icon{#Arch}.ico"
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
