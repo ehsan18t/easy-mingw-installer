@@ -1,5 +1,8 @@
 #include "Environment.iss"
 
+#define MyAppPublisher "Ehsan"
+#define MyAppURL "https://ehsan.pages.dev"
+
 #ifndef MyAppName
   #define MyAppName "Easy MinGW Installer"
 #endif
@@ -38,9 +41,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "{#SourcePath}"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-; [Tasks]
-; Name: envPath; Description: "Add to PATH variable" 
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
