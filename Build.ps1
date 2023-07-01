@@ -164,10 +164,6 @@ $selectedAsset = $null
 if ($selectedRelease) {
     $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $pattern }
     Write-Host " -> Selected Asset: $($selectedAsset.name)"
-    if (!$selectedAsset) {
-        Write-Host " ERROR: No asset found that match the filter criteria."
-        Exit 1
-    }
 }
 else {
     Write-Host " ERROR: No release found that match the filter criteria."
@@ -203,4 +199,5 @@ if ($selectedAsset) {
 }
 else {
     Write-Host " -> ERROR: No asset matching the pattern was found."
+    Exit 1
 }
