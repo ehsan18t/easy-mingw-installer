@@ -141,12 +141,38 @@ $repo = "winlibs_mingw"
 $pattern = $namePattern
 $versionRegex = "(?<=gcc-)\d+\.\d+\.\d+"
 
-# Get the latest release information
-$releaseUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-$releaseInfo = Invoke-RestMethod -Uri $releaseUrl
+# Get the releases information
+$releasesUrl = "https://api.github.com/repos/$owner/$repo/releases"
+$releasesInfo = Invoke-RestMethod -Uri $releasesUrl
 
-# Filter assets based on the regular expression pattern
-$selectedAsset = $releaseInfo.assets | Where-Object { $_.name -match $pattern }
+# Filter releases based on the regular expression pattern in the title
+$selectedRelease = $null
+foreach ($release in $releasesInfo) {
+    if ($release.name -like "GCC*LLVM*MinGW*UCRT*" -and !$release.prerelease) {
+        if ($null-eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
+            $selectedRelease = $release
+        }
+    }
+}
+
+Write-Host " -> Selected Release: $($selectedRelease.name)"
+$parsedTime = Get-Date -Date $selectedRelease.published_at -Format "dd-MMM-yyyy HH:mm:ss"
+Write-Host " -> Release date: $parsedTime"
+
+# Check if there are any release available
+$selectedAsset = $null
+if ($selectedRelease) {
+    $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $pattern }
+    Write-Host " -> Selected Asset: $($selectedAsset.name)"
+    if (!$selectedAsset) {
+        Write-Host " ERROR: No asset found that match the filter criteria."
+        Exit 1
+    }
+}
+else {
+    Write-Host " ERROR: No release found that match the filter criteria."
+    Exit 1
+}
 
 if ($selectedAsset) {
     # Get the asset download URL, name, and size
