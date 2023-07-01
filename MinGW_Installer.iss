@@ -23,6 +23,7 @@
 AppId={{078C8544-DE40-43A5-B293-58408E30C089}
 AppName={#MyAppName}
 SetupIconFile="assets\icon{#Arch}.ico"
+UninstallDisplayIcon="{sd}\MinGW{#Arch}\icon{#Arch}.ico"
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
@@ -41,6 +42,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "{#SourcePath}"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
