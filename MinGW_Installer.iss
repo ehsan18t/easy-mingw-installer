@@ -37,6 +37,8 @@ SolidCompression=yes
 WizardStyle=modern
 ChangesEnvironment=yes
 InfoBeforeFile="{#SourcePath}\version_info.txt"
+DisableDirPage=auto
+DisableProgramGroupPage=auto
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
