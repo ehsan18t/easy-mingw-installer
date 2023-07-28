@@ -51,17 +51,15 @@
   🅰️ It's based on Winlibs which is also listed on official MinGW website and it's one of the best option for Windows system.
 ```
 
-<br>
 </details>
 <details>
   <summary> ✔️ Whats the difference between this one and Winlibs?</summary>
 <br>
 
 ```
-  🅰️ Nothing. Except for the fact that Winlibs doesn't provide an installer this one does.
+  🅰️ Nothing. Except for the fact that Winlibs doesn't provide an installer which this one does.
 ```
 
-<br>
 </details>
 <details>
   <summary> ✔️ What version of GCC is being used here?</summary>
@@ -71,17 +69,15 @@
   🅰️ GCC version is same as Winlibs since that's the base. But Winlibs so far kept GCC up to date. So expect latest version GCC.
 ```
 
-<br>
 </details>
 <details>
-  <summary> ✔️ I don't trust your builds. Can I build a installer myslef?</summary>
+  <summary> ✔️ Can I build a installer myself?</summary>
 <br>
 
 ```
-  🅰️ Yes, all you have to install 7zip, Inno Setup and run the <strong>run.bat</strong> file. The rest will be handled by the scripts that I've created.
+  🅰️ Yes, all you have to install 7zip, Inno Setup and run the run.bat file. The rest will be handled by the scripts that I've created.
 ```
 
-<br>
 </details>
 
 <br>
