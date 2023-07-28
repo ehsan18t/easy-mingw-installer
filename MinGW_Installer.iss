@@ -1,4 +1,4 @@
-#include "Environment.iss"
+#include "inno\Environment.iss"
 
 #define MyAppPublisher "Ehsan"
 #define MyAppURL "https://ehsan.pages.dev"
@@ -41,7 +41,7 @@ DisableDirPage=auto
 DisableProgramGroupPage=auto
 
 [Languages]
-Name: "english"; MessagesFile: "lang\English.isl"
+Name: "english"; MessagesFile: "inno\lang\English.isl"
 
 [Files]
 Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
