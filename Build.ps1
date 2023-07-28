@@ -184,7 +184,7 @@ if ($selectedAsset) {
     # Extract the downloaded file
     $unzipDestination = $PSScriptRoot
     Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
-    $extractedFolderPath = "\mingw$arch\*"
+    $extractedFolderPath = "\mingw$arch"
 
     # Set the SourcePath for Inno Setup
     $sourcePath = Join-Path -Path $currentDirectory -ChildPath $extractedFolderPath

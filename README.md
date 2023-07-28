@@ -34,8 +34,10 @@
 <br>
 
 ## ⚙️ **Installations**
-  * Click the downloaded `exe` file.
-  * click `Install`.
+  * Run the downloaded `exe` file.
+  * Read `Version Info` (Optional)
+  * Click `Next` 
+  * Click `Install`.
 
 <br>
 

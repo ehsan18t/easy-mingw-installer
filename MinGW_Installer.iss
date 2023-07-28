@@ -36,12 +36,13 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 ChangesEnvironment=yes
+InfoBeforeFile="{#SourcePath}\version_info.txt"
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#SourcePath}"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 
 [Code]
