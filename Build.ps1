@@ -139,7 +139,6 @@ $repo = "winlibs_mingw"
 
 # Set the regular expression pattern for the varying portion of the file name
 $pattern = $namePattern
-$versionRegex = "(?<=gcc-)\d+\.\d+\.\d+"
 
 # Get the releases information
 $releasesUrl = "https://api.github.com/repos/$owner/$repo/releases"
@@ -192,7 +191,7 @@ if ($selectedAsset) {
 
     # Set the variables for Inno Setup
     $name = "Easy MinGW Installer"
-    $version = [regex]::Match($assetName, $versionRegex).Value
+    $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
 
     # Build the installer
     Build-Installer -Name $name -Version $version -SourcePath $sourcePath
