@@ -41,7 +41,7 @@ DisableDirPage=auto
 DisableProgramGroupPage=auto
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "english"; MessagesFile: "lang\English.isl"
 
 [Files]
 Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
