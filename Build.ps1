@@ -147,8 +147,8 @@ $releasesInfo = Invoke-RestMethod -Uri $releasesUrl
 # Filter releases based on the regular expression pattern in the title
 $selectedRelease = $null
 foreach ($release in $releasesInfo) {
-    if ($release.name -like "*CC*LLVM*MinGW*UCRT*" -and !$release.prerelease) {
-        if ($null-eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
+    if ($release.name -like "*CC*POSIX*LLVM*MinGW*UCRT*" -and !$release.prerelease) {
+        if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
             $selectedRelease = $release
         }
     }
