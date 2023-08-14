@@ -21,7 +21,28 @@
 
 ## 📜 **Features**
   * Everything from [Winlibs](https://github.com/brechtsanders/winlibs_mingw)
-  * 2 click installer
+  * Easy Installation
+  * Latest GCC Version
+  * Essential Packages for Production
+    - GCC
+    - GDB
+    - MinGW-w64 (linked with ucrt)
+    - GNU Binutils
+    - GNU Make
+    - PExports
+    - dos2unix
+    - Yasm
+    - NASM
+    - JWasm
+    - ccache
+    - CMake
+    - ninja
+    - doxygen
+
+  - **Thread Model:** POSIX
+  - **Runtime Library:** UCRT 
+
+> Windows 10 or higher, or when [Update for Universal C Runtime](https://support.microsoft.com/en-us/topic/update-for-universal-c-runtime-in-windows-c0514201-7fe6-95a3-b0a5-287930f3560c) is installed on older Windows versions, not supported on systems older than Windows 7 SP1 and Windows Server 2008 R2 SP1
 
 <br>
 
@@ -39,6 +60,8 @@
   * Click `Next` 
   * Click `Install`.
 
+> You can alternatively follow this [gist](https://gist.github.com/ehsan18t/8191a75270a14cbb472c0eb017db7f35) I wrote.
+
 <br>
 
 ## ⁉️ **FAQ**
@@ -47,36 +70,28 @@
   <summary> ✔️ What is this based on?</summary>
 <br>
 
-```
-  🅰️ It's based on Winlibs which is also listed on official MinGW website and it's one of the best option for Windows system.
-```
+>  🅰️ It's based on Winlibs which is also listed on official MinGW website and it's one of the best option for Windows system.
 
 </details>
 <details>
   <summary> ✔️ Whats the difference between this one and Winlibs?</summary>
 <br>
 
-```
-  🅰️ Nothing. Except for the fact that Winlibs doesn't provide an installer which this one does.
-```
+>  🅰️ Nothing. Except for the fact that Winlibs doesn't provide an installer which this one does.
 
 </details>
 <details>
   <summary> ✔️ What version of GCC is being used here?</summary>
 <br>
 
-```
-  🅰️ GCC version is same as Winlibs since that's the base. But Winlibs so far kept GCC up to date. So expect latest version GCC.
-```
+>  🅰️ GCC version is same as Winlibs since that's the base. But Winlibs so far kept GCC up to date. So expect latest version GCC.
 
 </details>
 <details>
   <summary> ✔️ Can I build a installer myself?</summary>
 <br>
 
-```
-  🅰️ Yes, all you have to install 7zip, Inno Setup and run the run.bat file. The rest will be handled by the scripts that I've created.
-```
+>  🅰️ Yes, all you have to install 7zip, Inno Setup and run the run.bat file. The rest will be handled by the scripts that I've created.
 
 </details>
 
