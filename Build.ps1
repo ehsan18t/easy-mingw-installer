@@ -3,6 +3,9 @@ param(
     [string]$arch,
 
     [Parameter(Mandatory = $true)]
+    [string]$titlePattern
+
+    [Parameter(Mandatory = $true)]
     [string]$namePattern
 )
 
@@ -148,7 +151,7 @@ function main {
     # Filter releases based on the regular expression pattern in the title
     $selectedRelease = $null
     foreach ($release in $releasesInfo) {
-        if ($release.name -like "*CC*POSIX*LLVM*MinGW*UCRT*" -and !$release.prerelease) {
+        if ($release.name -like $titlePattern -and !$release.prerelease) {
             if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
                 $selectedRelease = $release
             }
