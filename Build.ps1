@@ -3,6 +3,9 @@ param(
     [string]$arch,
 
     [Parameter(Mandatory = $true)]
+    [string]$titlePattern,
+
+    [Parameter(Mandatory = $true)]
     [string]$namePattern
 )
 
@@ -133,70 +136,74 @@ function Build-Installer {
     Remove-Folder -FolderPath $SourcePath
 }
 
-# Set the GitHub repository details
-$owner = "brechtsanders"
-$repo = "winlibs_mingw"
+function main {
+    # Set the GitHub repository details
+    $owner = "brechtsanders"
+    $repo = "winlibs_mingw"
 
-# Set the regular expression pattern for the varying portion of the file name
-$pattern = $namePattern
+    # Set the regular expression pattern for the varying portion of the file name
+    $pattern = $namePattern
 
-# Get the releases information
-$releasesUrl = "https://api.github.com/repos/$owner/$repo/releases"
-$releasesInfo = Invoke-RestMethod -Uri $releasesUrl
+    # Get the releases information
+    $releasesUrl = "https://api.github.com/repos/$owner/$repo/releases"
+    $releasesInfo = Invoke-RestMethod -Uri $releasesUrl
 
-# Filter releases based on the regular expression pattern in the title
-$selectedRelease = $null
-foreach ($release in $releasesInfo) {
-    if ($release.name -like "*CC*POSIX*LLVM*MinGW*UCRT*" -and !$release.prerelease) {
-        if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
-            $selectedRelease = $release
+    # Filter releases based on the regular expression pattern in the title
+    $selectedRelease = $null
+    foreach ($release in $releasesInfo) {
+        if ($release.name -like $titlePattern -and !$release.prerelease) {
+            if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
+                $selectedRelease = $release
+            }
         }
+    }
+
+    Write-Host " -> Selected Release: $($selectedRelease.name)"
+    $parsedTime = Get-Date -Date $selectedRelease.published_at -Format "dd-MMM-yyyy HH:mm:ss"
+    Write-Host " -> Release date: $parsedTime"
+
+    # Check if there are any release available
+    $selectedAsset = $null
+    if ($selectedRelease) {
+        $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $pattern }
+        Write-Host " -> Selected Asset: $($selectedAsset.name)"
+    }
+    else {
+        Write-Host " ERROR: No release found that match the filter criteria."
+        Exit 1
+    }
+
+    if ($selectedAsset) {
+        # Get the asset download URL, name, and size
+        $assetUrl = $selectedAsset.browser_download_url
+        $assetName = $selectedAsset.name
+
+        # Set the destination path for the downloaded asset in the current directory
+        $destinationPath = Join-Path -Path $PSScriptRoot -ChildPath $assetName
+
+        # Download the asset
+        Download-File -Url $assetUrl -FileName $destinationPath
+        $downloadedFilePath = $currentDirectory + "\$assetName"
+
+        # Extract the downloaded file
+        $unzipDestination = $PSScriptRoot
+        Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
+        $extractedFolderPath = "\mingw$arch"
+
+        # Set the SourcePath for Inno Setup
+        $sourcePath = Join-Path -Path $currentDirectory -ChildPath $extractedFolderPath
+
+        # Set the variables for Inno Setup
+        $name = "Easy MinGW Installer"
+        $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
+
+        # Build the installer
+        Build-Installer -Name $name -Version $version -SourcePath $sourcePath
+    }
+    else {
+        Write-Host " -> ERROR: No asset matching the pattern was found."
+        Exit 1
     }
 }
 
-Write-Host " -> Selected Release: $($selectedRelease.name)"
-$parsedTime = Get-Date -Date $selectedRelease.published_at -Format "dd-MMM-yyyy HH:mm:ss"
-Write-Host " -> Release date: $parsedTime"
-
-# Check if there are any release available
-$selectedAsset = $null
-if ($selectedRelease) {
-    $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $pattern }
-    Write-Host " -> Selected Asset: $($selectedAsset.name)"
-}
-else {
-    Write-Host " ERROR: No release found that match the filter criteria."
-    Exit 1
-}
-
-if ($selectedAsset) {
-    # Get the asset download URL, name, and size
-    $assetUrl = $selectedAsset.browser_download_url
-    $assetName = $selectedAsset.name
-
-    # Set the destination path for the downloaded asset in the current directory
-    $destinationPath = Join-Path -Path $PSScriptRoot -ChildPath $assetName
-
-    # Download the asset
-    Download-File -Url $assetUrl -FileName $destinationPath
-    $downloadedFilePath = $currentDirectory + "\$assetName"
-
-    # Extract the downloaded file
-    $unzipDestination = $PSScriptRoot
-    Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
-    $extractedFolderPath = "\mingw$arch"
-
-    # Set the SourcePath for Inno Setup
-    $sourcePath = Join-Path -Path $currentDirectory -ChildPath $extractedFolderPath
-
-    # Set the variables for Inno Setup
-    $name = "Easy MinGW Installer"
-    $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
-
-    # Build the installer
-    Build-Installer -Name $name -Version $version -SourcePath $sourcePath
-}
-else {
-    Write-Host " -> ERROR: No asset matching the pattern was found."
-    Exit 1
-}
+main
