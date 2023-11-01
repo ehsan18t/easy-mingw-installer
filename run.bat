@@ -4,7 +4,7 @@ IF EXIST "%~dp0Output" (RMDIR /S /Q "%~dp0Output")
 CALL :Check
 CALL :CleanUp
 
-SET "titlePattern=*CC*POSIX*LLVM*MinGW*UCRT*"
+SET "titlePattern=*CC*POSIX*MinGW*UCRT*"
 
 powershell.exe -ExecutionPolicy Bypass -File "Build.ps1" -arch "32" -titlePattern "%titlePattern%" -namePattern "winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 powershell.exe -ExecutionPolicy Bypass -File "Build.ps1" -arch "64" -titlePattern "%titlePattern%" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
