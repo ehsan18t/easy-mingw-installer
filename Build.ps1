@@ -3,7 +3,7 @@ param(
     [string]$arch,
 
     [Parameter(Mandatory = $true)]
-    [string]$titlePattern
+    [string]$titlePattern,
 
     [Parameter(Mandatory = $true)]
     [string]$namePattern
