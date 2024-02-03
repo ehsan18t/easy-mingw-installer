@@ -40,9 +40,10 @@
     - doxygen
 
   - **Thread Model:** POSIX
-  - **Runtime Library:** UCRT 
+  - **Runtime Library:** UCRT
 
-> Windows 10 or higher, or when [Update for Universal C Runtime](https://support.microsoft.com/en-us/topic/update-for-universal-c-runtime-in-windows-c0514201-7fe6-95a3-b0a5-287930f3560c) is installed on older Windows versions, not supported on systems older than Windows 7 SP1 and Windows Server 2008 R2 SP1
+> [!NOTE]
+> Windows 10 or higher, or when [Update for Universal C Runtime](https://support.microsoft.com/en-us/topic/update-for-universal-c-runtime-in-windows-c0514201-7fe6-95a3-b0a5-287930f3560c) is installed on older Windows versions, not supported on systems older than Windows 7 SP1 and Windows Server 2008 R2 SP1.
 
 <br>
 
@@ -60,6 +61,7 @@
   * Click `Next` 
   * Click `Install`.
 
+> [!TIP]
 > You can alternatively follow this [gist](https://gist.github.com/ehsan18t/8191a75270a14cbb472c0eb017db7f35) I wrote.
 
 <br>
