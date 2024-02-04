@@ -1,5 +1,7 @@
 @ECHO OFF
 
+TITLE Easy MinGW Installer Builder
+
 IF EXIST "%~dp0Output" (RMDIR /S /Q "%~dp0Output")
 CALL :Check
 CALL :CleanUp
