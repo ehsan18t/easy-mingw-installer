@@ -136,6 +136,20 @@ function Build-Installer {
     Remove-Folder -FolderPath $SourcePath
 }
 
+function Get-LatestTag {
+    param (
+        [string]$Owner,
+        [string]$Repo
+    )
+
+    $tagsUrl = "https://api.github.com/repos/$Owner/$Repo/tags"
+    $tagsInfo = Invoke-RestMethod -Uri $tagsUrl
+
+    $latestTag = $tagsInfo[0].name
+    Write-Host " -> Latest EMI Tag: $latestTag"
+    return $latestTag
+}
+
 function main {
     # Set the GitHub repository details
     $owner = "brechtsanders"
@@ -174,6 +188,18 @@ function main {
     }
 
     if ($selectedAsset) {
+        # Set the variables for Inno Setup
+        $name = "Easy MinGW Installer"
+        $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
+
+        # Check if new release is available
+        $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+
+        if ($latestTag -eq $version) {
+            Write-Host " -> NO NEW RELEASE AVAILABLE.`n"
+            Exit 0
+        }
+    
         # Get the asset download URL, name, and size
         $assetUrl = $selectedAsset.browser_download_url
         $assetName = $selectedAsset.name
@@ -192,10 +218,6 @@ function main {
 
         # Set the SourcePath for Inno Setup
         $sourcePath = Join-Path -Path $currentDirectory -ChildPath $extractedFolderPath
-
-        # Set the variables for Inno Setup
-        $name = "Easy MinGW Installer"
-        $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
 
         # Build the installer
         Build-Installer -Name $name -Version $version -SourcePath $sourcePath
