@@ -2,6 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$arch,
 
+    [Parameter(Mandatory = $false)]
+    [switch]$checkNewRelease,
+
     [Parameter(Mandatory = $true)]
     [string]$titlePattern,
 
@@ -195,11 +198,13 @@ function main {
         $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
 
         # Check if new release is available
-        $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
-
-        if ($latestTag -eq $version) {
-            Write-Host " -> NO NEW RELEASE AVAILABLE.`n"
-            Exit 0
+        if ($checkNewRelease) {
+            $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+            
+            if ($latestTag -eq $version) {
+                Write-Host " -> NO NEW RELEASE AVAILABLE.`n"
+                Exit 0
+            }
         }
     
         # Get the asset download URL, name, and size

@@ -4,10 +4,22 @@ IF EXIST "%~dp0Output" (RMDIR /S /Q "%~dp0Output")
 CALL :Check
 CALL :CleanUp
 
+@REM CONFIGS
+@REM Change "buildOnlyIfNewRelease=0" for your personal build
+SET "buildOnlyIfNewRelease=1"
 SET "titlePattern=*CC*POSIX*MinGW*UCRT*"
+SET "namePattern64=winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+SET "namePattern32=winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 
-powershell.exe -ExecutionPolicy Bypass -File "Build.ps1" -arch "64" -titlePattern "%titlePattern%" -namePattern "winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
-powershell.exe -ExecutionPolicy Bypass -File "Build.ps1" -arch "32" -titlePattern "%titlePattern%" -namePattern "winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
+@REM BUILD (DO NOT CHANGE IF YOU DON'T KNOW WHAT YOU ARE DOING)
+if "%buildOnlyIfNewRelease%"=="1" (
+    SET "buildOnlyIfNewRelease=-checkNewRelease"
+) else (
+    SET "buildOnlyIfNewRelease="
+)
+
+PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -arch "64" %buildOnlyIfNewRelease% -titlePattern "%titlePattern%" -namePattern "%namePattern64%"
+PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -arch "32" %buildOnlyIfNewRelease% -titlePattern "%titlePattern%" -namePattern "%namePattern32%"
 
 CALL :CleanUp
 CALL :END
