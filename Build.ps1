@@ -9,6 +9,8 @@ param(
     [string]$namePattern
 )
 
+Write-Host " -> Arch: $arch-bit"
+
 $currentDirectory = $PWD.Path
 
 function Download-File {
