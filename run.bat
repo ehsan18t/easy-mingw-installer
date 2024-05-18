@@ -11,17 +11,17 @@ CALL :CleanUp
 SET "buildOnlyIfNewRelease=1"
 
 @REM DO NOT CHANGE ANYTHING BELOW IF YOU DON'T KNOW WHAT YOU ARE DOING
-SET "NR="
 SET "TP=*CC*POSIX*MinGW*UCRT*"
 SET "NP64=winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 SET "NP32=winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 
+set PowerShellCmd=PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -titlePattern "%TP%" -archs "64","32" -namePatterns "%NP64%","%NP32%"
+
 if "%buildOnlyIfNewRelease%"=="1" (
-    SET "NR=-checkNewRelease"
+    set PowerShellCmd=%PowerShellCmd% -checkNewRelease
 )
 
-PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -arch "64" %NR% -titlePattern "%TP%" -namePattern "%NP64%"
-PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -arch "32" %NR% -titlePattern "%TP%" -namePattern "%NP32%"
+%PowerShellCmd%
 
 CALL :CleanUp
 CALL :END
