@@ -31,6 +31,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 CreateAppDir=no
 PrivilegesRequired=admin
+OutputDir={#OutputPath}
 OutputBaseFilename="{#MyAppName} v{#MyAppVersion} ({#Arch}-bit)"
 Compression=lzma2/ultra64  
 SolidCompression=yes

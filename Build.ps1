@@ -8,6 +8,15 @@ param(
     [Parameter(Mandatory = $true)]
     [string[]]$namePatterns,
 
+    [Parameter(Mandatory = $true)]
+    [string]$outputPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$7ZipPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$InnoSetupPath,
+
     [Parameter(Mandatory = $false)]
     [switch]$checkNewRelease,
 
@@ -74,9 +83,8 @@ function Extract-7z {
         [string]$DestinationPath
     )
 
-    $7zExe = "C:\Program Files\7-Zip\7z.exe"
-    if (-not (Test-Path $7zExe)) {
-        Write-Host " -> ERROR: 7-Zip executable not found at '$7zExe'. Please make sure 7-Zip is installed or update the path to the 7z.exe file."
+    if (-not (Test-Path $7ZipPath)) {
+        Write-Host " -> ERROR: 7-Zip executable not found at '$7ZipPath'. Please make sure 7-Zip is installed or update the path to the 7z.exe file."
         return
     }
 
@@ -84,7 +92,7 @@ function Extract-7z {
 
     $arguments = "x `"$ArchivePath`" -o`"$DestinationPath`" -y"
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $7zExe
+    $startInfo.FileName = $7ZipPath
     $startInfo.Arguments = $arguments
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
@@ -133,16 +141,15 @@ function Build-Installer {
 
     Write-Host " -> Building $Name. Path: $SourcePath"
 
-    $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
     $installerScript = "MinGW_Installer.iss"
 
-    $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DArch=`"$arch`" /DSourcePath=`"$SourcePath`""
+    $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DArch=`"$arch`" /DSourcePath=`"$SourcePath`" /DOutputPath=`"$outputPath`""
 
     $tempStdOutFile = [System.IO.Path]::GetTempFileName()
     $tempStdErrFile = [System.IO.Path]::GetTempFileName()
 
     # Start the process and wait for it to complete
-    $process = Start-Process -FilePath $innoSetupPath -ArgumentList $installerScript, $arguments `
+    $process = Start-Process -FilePath $InnoSetupPath -ArgumentList $installerScript, $arguments `
         -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempStdOutFile `
         -RedirectStandardError $tempStdErrFile
 

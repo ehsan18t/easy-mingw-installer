@@ -2,5 +2,6 @@
 *.zip
 *.exe
 Output/
+builds/
 mingw*/
 *.log
