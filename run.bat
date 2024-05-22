@@ -19,7 +19,6 @@ SET "InnoSetup="
 
 @REM Preparing the environment
 CALL :CheckApps
-CALL :CleanUp
 IF EXIST "%outputPath%" (RMDIR /S /Q "%outputPath%")
 IF EXIST "%~dp0*.log" (DEL "%~dp0*.log")
 
@@ -37,14 +36,7 @@ IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -generateLogs
 @REM Run the build script
 %PowerShellCmd%
 
-CALL :CleanUp
 CALL :END
-
-:CleanUp
-IF EXIST "%~dp0*.7z" (DEL "%~dp0*.7z")
-IF EXIST "%~dp0mingw64" (RMDIR /S /Q "%~dp0mingw64")
-IF EXIST "%~dp0mingw32" (RMDIR /S /Q "%~dp0mingw32")
-EXIT /B
 
 :CheckApps
 IF NOT EXIST "%W32%\Inno Setup 6\ISCC.exe"  (
