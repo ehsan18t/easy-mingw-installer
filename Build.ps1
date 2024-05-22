@@ -27,7 +27,12 @@ param(
 if ($archs.Count -eq 1) { $archs = $archs.Split(',') }
 if ($namePatterns.Count -eq 1) { $namePatterns = $namePatterns.Split(',') }
 
-$currentDirectory = $PWD.Path
+$tempDir = [System.IO.Path]::GetTempPath() + "EasyMinGWInstaller"
+if (Test-Path $tempDir) {
+    Remove-Item -Path $tempDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $tempDir | Out-Null
+Write-Host " -> Current Temp Directory: $tempDir"
 
 function Download-File {
     param (
@@ -172,7 +177,7 @@ function Build-Installer {
         }
     } else {
         Write-Host " -> Building $Name Succeeded!"
-    }    
+    }
 
     Remove-Item -Path $tempStdOutFile, $tempStdErrFile
     Remove-Item -Path $SourcePath -Recurse -Force
@@ -255,19 +260,19 @@ function main {
                 $assetName = $selectedAsset.name
 
                 # Set the destination path for the downloaded asset in the current directory
-                $destinationPath = Join-Path -Path $PSScriptRoot -ChildPath $assetName
+                $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
 
                 # Download the asset
                 Download-File -Url $assetUrl -FileName $destinationPath
-                $downloadedFilePath = $currentDirectory + "\$assetName"
+                $downloadedFilePath = $tempDir + "\$assetName"
 
                 # Extract the downloaded file
-                $unzipDestination = $PSScriptRoot
+                $unzipDestination = $tempDir
                 Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
                 $extractedFolderPath = "\mingw$arch"
 
                 # Set the SourcePath for Inno Setup
-                $sourcePath = Join-Path -Path $currentDirectory -ChildPath $extractedFolderPath
+                $sourcePath = Join-Path -Path $tempDir -ChildPath $extractedFolderPath
 
                 # Build the installer
                 Build-Installer -Name $name -Version $version -SourcePath $sourcePath
@@ -276,6 +281,8 @@ function main {
                 Exit 1
             }
         }
+
+        Remove-Item -Path $tempDir -Recurse -Force
     } else {
         Write-Host " -> ERROR: Arrays are not of the same length."
         Exit 1
