@@ -10,6 +10,9 @@ CALL :CleanUp
 @REM CONFIGS
 @REM Change "buildOnlyIfNewRelease=0" for your personal build
 SET "buildOnlyIfNewRelease=1"
+@REM By default, logs are generated only if there is an error.
+@REM Change "generateLogsAlways=1" to generate logs always
+SET "generateLogsAlways=0"
 
 @REM DO NOT CHANGE ANYTHING BELOW IF YOU DON'T KNOW WHAT YOU ARE DOING
 SET "TP=*CC*POSIX*MinGW*UCRT*"
@@ -18,9 +21,8 @@ SET "NP32=winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 
 set PowerShellCmd=PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -titlePattern "%TP%" -archs "64","32" -namePatterns "%NP64%","%NP32%"
 
-if "%buildOnlyIfNewRelease%"=="1" (
-    set PowerShellCmd=%PowerShellCmd% -checkNewRelease
-)
+if "%buildOnlyIfNewRelease%"=="1" (set PowerShellCmd=%PowerShellCmd% -checkNewRelease)
+if "%generateLogsAlways%"=="1" (set PowerShellCmd=%PowerShellCmd% -generateLogsAlways)
 
 %PowerShellCmd%
 

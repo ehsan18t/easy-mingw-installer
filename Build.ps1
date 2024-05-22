@@ -9,7 +9,10 @@ param(
     [string[]]$namePatterns,
 
     [Parameter(Mandatory = $false)]
-    [switch]$checkNewRelease
+    [switch]$checkNewRelease,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$generateLogsAlways
 )
 
 if ($archs.Count -eq 1) { $archs = $archs.Split(',') }
@@ -150,16 +153,21 @@ function Build-Installer {
     $stdOutContent = Get-Content $tempStdOutFile
     $stdErrContent = Get-Content $tempStdErrFile
 
-    if ($exitCode -ne 0) {
+    if ($exitCode -ne 0 -or $generateLogsAlways) {
         $logFile = "build$arch.log"
         $stdOutContent + $stdErrContent | Out-File -FilePath $logFile
-        Write-Host " -> Building $Name Failed! Check the log file for details: $logFile"
-        Exit 1
+
+        if ($exitCode -ne 0) {
+            Write-Host " -> ERROR: Building $Name Failed! Check the log file for details: $logFile"
+            Exit 1
+        } else {
+            Write-Host " -> Building $Name Succeeded! Check the log file for details: $logFile"
+        }
     } else {
-        Remove-Item -Path $tempStdOutFile, $tempStdErrFile
         Write-Host " -> Building $Name Succeeded!"
     }    
 
+    Remove-Item -Path $tempStdOutFile, $tempStdErrFile
     Remove-Item -Path $SourcePath -Recurse -Force
 }
 
