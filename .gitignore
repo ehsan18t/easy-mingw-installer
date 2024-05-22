@@ -3,3 +3,4 @@
 *.exe
 Output/
 mingw*/
+*.log
