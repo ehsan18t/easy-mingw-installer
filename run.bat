@@ -62,6 +62,7 @@ IF NOT EXIST "%W64%\7-Zip\7z.exe"  (
 EXIT /B
 
 :END
-ECHO  ^>^> Press any key to EXIT...
+ECHO.
+ECHO  ^>^> Press any key to EXIT ^<^<
 PAUSE > NUL
 EXIT

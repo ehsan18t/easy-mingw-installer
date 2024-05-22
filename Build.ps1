@@ -31,8 +31,10 @@ $tempDir = [System.IO.Path]::GetTempPath() + "EasyMinGWInstaller"
 if (Test-Path $tempDir) {
     Remove-Item -Path $tempDir -Recurse -Force
 }
+
 New-Item -ItemType Directory -Path $tempDir | Out-Null
-Write-Host " -> Current Temp Directory: $tempDir"
+Write-Host " -> Temp Directory: $tempDir"
+Write-Host " -> Output Directory: $outputPath `n"
 
 function Download-File {
     param (
@@ -42,8 +44,6 @@ function Download-File {
         [Parameter(Mandatory = $true)]
         [string]$FileName
     )
-
-    Write-Host " -> Downloading $FileName..."
 
     $uri = New-Object "System.Uri" "$Url"
     $request = [System.Net.HttpWebRequest]::Create($uri)
@@ -68,7 +68,7 @@ function Download-File {
         $downloadedBytes += $count
 
         [System.Console]::CursorLeft = 0
-        [System.Console]::Write("  >> Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
+        [System.Console]::Write("    >> Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
     }
 
     $targetStream.Flush()
@@ -76,7 +76,7 @@ function Download-File {
     $targetStream.Dispose()
     $responseStream.Dispose()
 
-    Write-Host "`n -> Download completed."
+    Write-Host "`n    *** Download completed ***"
 }
 
 function Extract-7z {
@@ -93,8 +93,6 @@ function Extract-7z {
         return
     }
 
-    Write-Host " -> Extracting $ArchivePath"
-
     $arguments = "x `"$ArchivePath`" -o`"$DestinationPath`" -y"
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $7ZipPath
@@ -108,7 +106,7 @@ function Extract-7z {
     $process.WaitForExit()
 
     if ($process.ExitCode -eq 0) {
-        Write-Host " -> Extraction completed."
+        Write-Host "    *** Extraction Completed ***"
     }
     else {
         Write-Host " -> ERROR: Error occurred during extraction."
@@ -125,7 +123,7 @@ function Remove-Folder {
     if (Test-Path $FolderPath) {
         # Remove the folder and its contents recursively
         Remove-Item -Path $FolderPath -Recurse -Force
-        Write-Host " -> Removed '$FolderPath'"
+        Write-Host "     *** Removed '$FolderPath' ***"
     }
     else {
         Write-Host " -> ERROR: Folder '$FolderPath' not found."
@@ -143,8 +141,6 @@ function Build-Installer {
         Write-Host " -> Building $Name Failed!"
         Exit 1
     }
-
-    Write-Host " -> Building $Name. Path: $SourcePath"
 
     $installerScript = "MinGW_Installer.iss"
 
@@ -173,10 +169,11 @@ function Build-Installer {
             Write-Host " -> ERROR: Building $Name Failed! Check the log file for details: $logFile"
             Exit 1
         } else {
-            Write-Host " -> Building $Name Succeeded! Check the log file for details: $logFile"
+            Write-Host "    *** Building $Name Succeeded! ***"
+            Write-Host " -> Check the log file for details: $logFile"
         }
     } else {
-        Write-Host " -> Building $Name Succeeded!"
+        Write-Host "    *** Building $Name Succeeded! ***"
     }
 
     Remove-Item -Path $tempStdOutFile, $tempStdErrFile
@@ -228,7 +225,7 @@ function main {
             $arch = $archs[$i]
             $arrSize = $archs.Length
 
-            Write-Host " -> Arch: $arch-bit"
+            Write-Host "`n -> Arch: $arch-bit"
             # Write-Host " -> Pattern: $pattern"
 
             $selectedAsset = $null
@@ -263,10 +260,12 @@ function main {
                 $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
 
                 # Download the asset
+                Write-Host " -> Downloading {TEMP_DIR}/$assetName"
                 Download-File -Url $assetUrl -FileName $destinationPath
                 $downloadedFilePath = $tempDir + "\$assetName"
 
                 # Extract the downloaded file
+                Write-Host " -> Extracting {TEMP_DIR}/$assetName"
                 $unzipDestination = $tempDir
                 Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
                 $extractedFolderPath = "\mingw$arch"
@@ -275,6 +274,7 @@ function main {
                 $sourcePath = Join-Path -Path $tempDir -ChildPath $extractedFolderPath
 
                 # Build the installer
+                Write-Host " -> Building $name"
                 Build-Installer -Name $name -Version $version -SourcePath $sourcePath
             } else {
                 Write-Host " -> ERROR: No asset matching the pattern was found."
