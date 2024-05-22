@@ -62,8 +62,6 @@ function Download-File {
     Write-Host "`n -> Download completed."
 }
 
-
-
 function Extract-7z {
     param (
         [Parameter(Mandatory = $true)]
@@ -126,20 +124,43 @@ function Build-Installer {
     )
 
     if (-NOT (Test-Path $SourcePath)) {
-        Write-Host " -> Builing $Name Failed!"
+        Write-Host " -> Building $Name Failed!"
         Exit 1
     }
 
-    Write-Host " -> Builing $Name. Path: $SourcePath"
+    Write-Host " -> Building $Name. Path: $SourcePath"
 
     $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
     $installerScript = "MinGW_Installer.iss"
 
     $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DArch=`"$arch`" /DSourcePath=`"$SourcePath`""
 
-    Start-Process -FilePath $innoSetupPath -ArgumentList $installerScript, $arguments -NoNewWindow -Wait
+    $tempStdOutFile = [System.IO.Path]::GetTempFileName()
+    $tempStdErrFile = [System.IO.Path]::GetTempFileName()
 
-    Remove-Folder -FolderPath $SourcePath
+    # Start the process and wait for it to complete
+    $process = Start-Process -FilePath $innoSetupPath -ArgumentList $installerScript, $arguments `
+        -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempStdOutFile `
+        -RedirectStandardError $tempStdErrFile
+
+    # Get the exit code of the process
+    $exitCode = $process.ExitCode
+
+    # Read the content of the temp files
+    $stdOutContent = Get-Content $tempStdOutFile
+    $stdErrContent = Get-Content $tempStdErrFile
+
+    if ($exitCode -ne 0) {
+        $logFile = "build$arch.log"
+        $stdOutContent + $stdErrContent | Out-File -FilePath $logFile
+        Write-Host " -> Building $Name Failed! Check the log file for details: $logFile"
+        Exit 1
+    } else {
+        Remove-Item -Path $tempStdOutFile, $tempStdErrFile
+        Write-Host " -> Building $Name Succeeded!"
+    }    
+
+    Remove-Item -Path $SourcePath -Recurse -Force
 }
 
 function Get-LatestTag {

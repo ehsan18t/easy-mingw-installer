@@ -3,6 +3,7 @@
 TITLE Easy MinGW Installer Builder
 
 IF EXIST "%~dp0Output" (RMDIR /S /Q "%~dp0Output")
+IF EXIST "%~dp0*.log" (DEL "%~dp0*.log")
 CALL :Check
 CALL :CleanUp
 
