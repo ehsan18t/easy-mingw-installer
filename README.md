@@ -61,6 +61,16 @@
   * Click `Next` 
   * Click `Install`.
 
+<br>
+
+**Video Tutorial**
+
+<div align="center">
+
+https://github.com/ehsan18t/easy-mingw-installer/assets/30434801/f5bc4e12-ba8f-4c34-86b1-6842699a6be1
+
+</div>
+
 > [!TIP]
 > You can alternatively follow this [gist](https://gist.github.com/ehsan18t/8191a75270a14cbb472c0eb017db7f35) I wrote.
 
