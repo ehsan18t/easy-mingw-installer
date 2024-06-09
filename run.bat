@@ -22,6 +22,7 @@ SET "W64=%ProgramFiles%"
 SET "W32=%ProgramFiles% (x86)"
 SET "SevenZip="
 SET "InnoSetup="
+SET "Builder_Script=%~dp0Builder.ps1"
 
 @REM Preparing the environment
 CALL :CheckApps
@@ -34,7 +35,7 @@ SET "NP64=winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 SET "NP32=winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 
 @REM Build Command
-SET PowerShellCmd=PowerShell -ExecutionPolicy Bypass -File "Build.ps1" -titlePattern "%TP%" -archs "64","32" -namePatterns "%NP64%","%NP32%"
+SET PowerShellCmd=PowerShell -ExecutionPolicy Bypass -File "%Builder_Script%" -titlePattern "%TP%" -archs "64","32" -namePatterns "%NP64%","%NP32%"
 SET PowerShellCmd=%PowerShellCmd% -outputPath "%outputPath%" -InnoSetupPath "%InnoSetup%" -7ZipPath "%SevenZip%"
 IF "%buildOnlyIfNewRelease%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -checkNewRelease )
 IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -generateLogsAlways )
