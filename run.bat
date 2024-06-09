@@ -46,18 +46,21 @@ IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -generateLogs
 CALL :END
 
 :CheckApps
-IF NOT EXIST "%W32%\Inno Setup 6\ISCC.exe"  (
-    IF NOT EXIST "%W64%\Inno Setup 6\ISCC.exe"  (
-        ECHO  -^> ERROR: Inno Setup not installed!
+CALL :CheckAppInstalled "Inno Setup" "InnoSetup" "Inno Setup 6\ISCC.exe"
+CALL :CheckAppInstalled "7-Zip" "SevenZip" "7-Zip\7z.exe"
+
+ECHO -^> 7-Zip: %SevenZip%
+ECHO -^> Inno Setup: %InnoSetup%
+ECHO.
+EXIT /B
+
+:CheckAppInstalled
+IF NOT EXIST "%W32%\%~3"  (
+    IF NOT EXIST "%W64%\%~3"  (
+        ECHO  -^> ERROR: %~1 not installed!
         CALL :END
-    ) ELSE ( SET "InnoSetup=%W64%\Inno Setup 6\ISCC.exe" )
-) ELSE ( SET "InnoSetup=%W32%\Inno Setup 6\ISCC.exe" )
-IF NOT EXIST "%W64%\7-Zip\7z.exe"  (
-    IF NOT EXIST "%W32%\7-Zip\7z.exe"  (
-        ECHO  -^> ERROR: 7-Zip not installed
-        CALL :END
-    ) ELSE ( SET "SevenZip=%W32%\7-Zip\7z.exe" )
-) ELSE ( SET "SevenZip=%W64%\7-Zip\7z.exe" )
+    ) ELSE ( SET "%~2=%W64%\%~3" )
+) ELSE ( SET "%~2=%W32%\%~3" )
 EXIT /B
 
 :END
