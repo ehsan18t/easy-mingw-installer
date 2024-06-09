@@ -10,6 +10,12 @@ SET "buildOnlyIfNewRelease=1"
 SET "generateLogsAlways=0"
 
 @REM DO NOT CHANGE ANYTHING BELOW IF YOU DON'T KNOW WHAT YOU ARE DOING
+@REM Parameters
+@REM GCC Version 12, 13, 14, 15
+SET "GCC_Ver=14"
+@REM MSVCRT or UCRT
+SET "Runtime=UCRT"
+
 @REM Paths Setup
 SET "outputPath=%~dp0builds"
 SET "W64=%ProgramFiles%"
@@ -23,7 +29,7 @@ IF EXIST "%outputPath%" (RMDIR /S /Q "%outputPath%")
 IF EXIST "%~dp0*.log" (DEL "%~dp0*.log")
 
 @REM RegEx Patterns
-SET "TP=*CC*POSIX*MinGW*UCRT*"
+SET "TP=*CC %GCC_Ver%*POSIX*MinGW*%Runtime%*"
 SET "NP64=winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 SET "NP32=winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 
