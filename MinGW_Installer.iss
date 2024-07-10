@@ -16,7 +16,7 @@
 #endif
 
 #ifndef SourcePath
-  #exit
+  #error "SourcePath not defined!"
 #endif
 
 [Setup]
@@ -51,12 +51,16 @@ Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-    if CurStep = ssPostInstall 
-     then EnvAddPath(ExpandConstant('{sd}') + '\MinGW{#Arch}\bin');
+  if CurStep = ssPostInstall then
+  begin
+    EnvAddPath(ExpandConstant('{sd}') + '\MinGW{#Arch}\bin');
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-    if CurUninstallStep = usPostUninstall
-    then EnvRemovePath(ExpandConstant('{sd}') + '\MinGW{#Arch}\bin');
+  if CurUninstallStep = usPostUninstall then
+  begin
+    EnvRemovePath(ExpandConstant('{sd}') + '\MinGW{#Arch}\bin');
+  end;
 end;
