@@ -137,11 +137,6 @@ function Build-Installer {
         [string]$SourcePath
     )
 
-    if (-NOT (Test-Path $SourcePath)) {
-        Write-Host " -> Building $Name Failed!"
-        Exit 1
-    }
-
     $installerScript = "MinGW_Installer.iss"
 
     $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DArch=`"$arch`" /DSourcePath=`"$SourcePath`" /DOutputPath=`"$outputPath`""
