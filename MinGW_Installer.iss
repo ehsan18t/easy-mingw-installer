@@ -49,6 +49,41 @@ Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion re
 Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 
 [Code]
+procedure ExitProcess(uExitCode: Integer);
+  external 'ExitProcess@kernel32.dll stdcall';
+
+procedure UninstallExistingVersion;
+begin
+  if DirExists(ExpandConstant('{sd}') + '\MinGW{#Arch}') then
+  begin
+    DelTree(ExpandConstant('{sd}') + '\MinGW{#Arch}', True, True, True);
+  end;
+end;
+
+procedure CheckForExistingInstallation;
+var
+  UserResponse: Integer;
+begin
+  if DirExists(ExpandConstant('{sd}') + '\MinGW{#Arch}') then
+  begin
+    UserResponse := MsgBox('A version of Easy MinGW Installer is already installed. It will be uninstalled to proceed. Do you want to continue?', mbConfirmation, MB_YESNO);
+    if UserResponse = IDYES then
+    begin
+      UninstallExistingVersion;
+    end
+    else
+    begin
+      WizardForm.Close;
+      ExitProcess(0);
+    end;
+  end;
+end;
+
+procedure InitializeWizard();
+begin
+  CheckForExistingInstallation;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
