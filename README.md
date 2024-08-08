@@ -37,7 +37,9 @@
     - ccache
     - CMake
     - ninja
-    - doxygen
+    - Doxygen
+    - Universal Ctags
+    - Cppcheck
 
   - **Thread Model:** POSIX
   - **Runtime Library:** UCRT
