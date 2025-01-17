@@ -193,3 +193,66 @@ function Get-Release {
 
     return $selectedRelease
 }
+
+function Build-Binary {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Arch,
+        [Parameter(Mandatory = $true)]
+        [string]$Pattern
+    )
+
+    Write-Host "`n -> Arch: $Arch-bit"
+    # Write-Host " -> Pattern: $pattern"
+
+    $selectedAsset = $null
+    if ($selectedRelease) {
+        $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $Pattern }
+        Write-Host " -> Selected Asset: $($selectedAsset.name)"
+    } else {
+        Write-Host " ERROR: No release found that match the filter criteria."
+        Exit 1
+    }
+
+    if ($selectedAsset) {
+        # Set the variables for Inno Setup
+        $name = "Easy MinGW Installer"
+        $version = Format-Date -Date $selectedRelease.published_at -asVersion
+
+        # Check if new release is available
+        if ($checkNewRelease) {
+            if ($latestTag -eq $version) {
+                Write-Host " -> NO NEW RELEASE AVAILABLE.`n"
+                Exit 0
+            }
+        }
+
+        # Get the asset download URL, name, and size
+        $assetUrl = $selectedAsset.browser_download_url
+        $assetName = $selectedAsset.name
+
+        # Set the destination path for the downloaded asset in the current directory
+        $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
+
+        # Download the asset
+        Write-Host " -> Downloading {TEMP_DIR}/$assetName"
+        Download-File -Url $assetUrl -FileName $destinationPath
+        $downloadedFilePath = $tempDir + "\$assetName"
+
+        # Extract the downloaded file
+        Write-Host " -> Extracting {TEMP_DIR}/$assetName"
+        $unzipDestination = $tempDir
+        Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
+        $extractedFolderPath = "\mingw$Arch"
+
+        # Set the SourcePath for Inno Setup
+        $sourcePath = Join-Path -Path $tempDir -ChildPath $extractedFolderPath
+
+        # Build the installer
+        Write-Host " -> Building $name"
+        Build-Installer -Name $name -Version $version -SourcePath $sourcePath
+    } else {
+        Write-Host " -> ERROR: No asset matching the pattern was found."
+        Exit 1
+    }
+}
