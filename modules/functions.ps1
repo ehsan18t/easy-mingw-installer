@@ -154,13 +154,19 @@ function Get-LatestTag {
 function Get-Release {
     param (
         [Parameter(Mandatory = $true)]
-        $ReleasesInfo,
+        [string]$Owner,
+        [Parameter(Mandatory = $true)]
+        [string]$Repo,
         [Parameter(Mandatory = $true)]
         [string]$TitlePattern
     )
 
+    # Get the releases information
+    $releasesUrl = "https://api.github.com/repos/$Owner/$Repo/releases"
+    $releasesInfo = Invoke-RestMethod -Uri $releasesUrl
+
     $selectedRelease = $null
-    foreach ($release in $ReleasesInfo) {
+    foreach ($release in $releasesInfo) {
         if ($release.name -like $TitlePattern -and !$release.prerelease) {
             if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
                 $selectedRelease = $release

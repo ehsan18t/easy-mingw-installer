@@ -52,12 +52,8 @@ function main {
     $owner = "brechtsanders"
     $repo = "winlibs_mingw"
 
-    # Get the releases information
-    $releasesUrl = "https://api.github.com/repos/$owner/$repo/releases"
-    $releasesInfo = Invoke-RestMethod -Uri $releasesUrl
-
     # Filter releases based on the regular expression pattern in the title
-    $selectedRelease = Get-Release -ReleasesInfo $releasesInfo -TitlePattern $titlePattern
+    $selectedRelease = Get-Release -Owner $owner -Repo $repo -TitlePattern $titlePattern
 
     # for loop to iterate over the archs
     if ($archs.Length -eq $namePatterns.Length) {
