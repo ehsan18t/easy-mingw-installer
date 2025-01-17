@@ -51,6 +51,7 @@ jobs:
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          draft: true
           files: builds/**/* # Ensure this matches the correct directory
           tag_name: ${{ env.tag }}
           name: Easy MinGW Installer v${{ env.tag }}
