@@ -48,6 +48,9 @@ Write-Host " -> Output Directory: $outputPath `n"
 # MAIN FUNCTION #
 #################
 function main {
+    # Get the latest EMI tag
+    $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+
     # Set the GitHub repository details
     $owner = "brechtsanders"
     $repo = "winlibs_mingw"
@@ -82,8 +85,6 @@ function main {
 
                 # Check if new release is available
                 if ($checkNewRelease) {
-                    $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
-
                     if ($latestTag -eq $version) {
                         Write-Host " -> NO NEW RELEASE AVAILABLE.`n"
                         Exit 0
