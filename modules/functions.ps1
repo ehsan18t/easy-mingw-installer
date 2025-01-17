@@ -206,7 +206,9 @@ function Build-Binary {
     # Write-Host " -> Pattern: $pattern"
 
     $selectedAsset = $null
-    if ($selectedRelease) {
+    if ($testMode) {
+        $selectedAsset = @{ name = "mingw-w64-$Arch-Test.7z" }
+    } elseif ($selectedRelease) {
         $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $Pattern }
         Write-Host " -> Selected Asset: $($selectedAsset.name)"
     } else {
@@ -217,7 +219,12 @@ function Build-Binary {
     if ($selectedAsset) {
         # Set the variables for Inno Setup
         $name = "Easy MinGW Installer"
-        $version = Format-Date -Date $selectedRelease.published_at -asVersion
+        $version = $null
+        if ($testMode) {
+            $version = "v2030.10.10"
+        } else {
+            $version = Format-Date -Date $selectedRelease.published_at -asVersion
+        }
 
         # Check if new release is available
         if ($checkNewRelease) {
@@ -227,10 +234,6 @@ function Build-Binary {
             }
         }
 
-        # Get the asset download URL, name, and size
-        $assetUrl = $selectedAsset.browser_download_url
-        $assetName = $selectedAsset.name
-
         if ($testMode) {
             Write-Host " -> TEST MODE: Skipping download and extraction."
             # make directory at "\mingw$Arch" with a dummy file
@@ -239,6 +242,10 @@ function Build-Binary {
             New-Item -Path $dummyFilePath -ItemType File -Force | Out-Null
             New-Item -Path $dummyVersionInfoPath -ItemType File -Force | Out-Null
         } else {
+            # Get the asset download URL, name, and size
+            $assetUrl = $selectedAsset.browser_download_url
+            $assetName = $selectedAsset.name
+
             # Set the destination path for the downloaded asset in the current directory
             $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
 

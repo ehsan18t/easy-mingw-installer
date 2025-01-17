@@ -52,14 +52,22 @@ Write-Host " -> Output Directory: $outputPath `n"
 #################
 function main {
     # Get the latest EMI tag
-    $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+    $latestTag = ""
+    if ($testMode) {
+        $latestTag = "v2030.01.01"
+    } else {
+        $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+    }
 
     # Set the GitHub repository details
     $owner = "brechtsanders"
     $repo = "winlibs_mingw"
 
     # Filter releases based on the regular expression pattern in the title
-    $selectedRelease = Get-Release -Owner $owner -Repo $repo -TitlePattern $titlePattern
+    $selectedRelease = $null
+    if (!$testMode) {
+        $selectedRelease = Get-Release -Owner $owner -Repo $repo -TitlePattern $titlePattern
+    }
 
     # for loop to iterate over the archs
     if ($archs.Length -eq $namePatterns.Length) {
