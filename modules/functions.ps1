@@ -150,3 +150,27 @@ function Get-LatestTag {
     Write-Host " -> Latest EMI Tag: $latestTag"
     return $latestTag
 }
+
+function Get-Release {
+    param (
+        [Parameter(Mandatory = $true)]
+        $ReleasesInfo,
+        [Parameter(Mandatory = $true)]
+        [string]$TitlePattern
+    )
+
+    $selectedRelease = $null
+    foreach ($release in $ReleasesInfo) {
+        if ($release.name -like $TitlePattern -and !$release.prerelease) {
+            if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
+                $selectedRelease = $release
+            }
+        }
+    }
+
+    Write-Host " -> Selected Release: $($selectedRelease.name)"
+    $parsedTime = Get-Date -Date $selectedRelease.published_at -Format "dd-MMM-yyyy HH:mm:ss"
+    Write-Host " -> Release date: $parsedTime"
+
+    return $selectedRelease
+}

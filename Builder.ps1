@@ -57,18 +57,7 @@ function main {
     $releasesInfo = Invoke-RestMethod -Uri $releasesUrl
 
     # Filter releases based on the regular expression pattern in the title
-    $selectedRelease = $null
-    foreach ($release in $releasesInfo) {
-        if ($release.name -like $titlePattern -and !$release.prerelease) {
-            if ($null -eq $selectedRelease -or $release.published_at -gt $selectedRelease.published_at) {
-                $selectedRelease = $release
-            }
-        }
-    }
-
-    Write-Host " -> Selected Release: $($selectedRelease.name)"
-    $parsedTime = Get-Date -Date $selectedRelease.published_at -Format "dd-MMM-yyyy HH:mm:ss"
-    Write-Host " -> Release date: $parsedTime"
+    $selectedRelease = Get-Release -ReleasesInfo $releasesInfo -TitlePattern $titlePattern
 
     # for loop to iterate over the archs
     if ($archs.Length -eq $namePatterns.Length) {
