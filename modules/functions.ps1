@@ -29,8 +29,10 @@ function Download-File {
         $targetStream.Write($buffer, 0, $count)
         $downloadedBytes += $count
 
-        [System.Console]::CursorLeft = 0
-        [System.Console]::Write("    >> Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
+        if ($env:GITHUB_ACTIONS -ne "true") {
+            [System.Console]::CursorLeft = 0
+            [System.Console]::Write("    >> Downloaded {0}K of {1}K ({2}%) <<   ", [System.Math]::Floor($downloadedBytes / 1024), $totalLength, [System.Math]::Floor(($downloadedBytes / $response.ContentLength) * 100))
+        }
     }
 
     $targetStream.Flush()
@@ -221,9 +223,14 @@ function Build-Binary {
         $name = "Easy MinGW Installer"
         $version = $null
         if ($testMode) {
-            $version = "v2030.10.10"
+            $version = "2030.10.10"
         } else {
             $version = Format-Date -Date $selectedRelease.published_at -asVersion
+        }
+
+        # Set Tag in ENV for GitHub Actions
+        if ($env:GITHUB_ACTIONS -eq "true") {
+            New-Item -Path tag -Name "$version" -ItemType "file" -Force
         }
 
         # Check if new release is available

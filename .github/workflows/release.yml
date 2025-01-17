@@ -1,10 +1,7 @@
-name: Build and Upload Release
+name: Build and Release with Auto Tagging
 
 on:
-  push:
-    tags:
-      - "*" # Trigger on new version tags (e.g., v1.0.0)
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,27 +15,65 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # Step 2: Run the build script
+      # Step 2: Run the build script including auto tagging
       - name: Run build script
         run: |
           cmd /c run.bat
 
-      # Step 3: Debug builds folder
+      # Step 3: Retrieve tag from file
+      - name: Retrieve and Create tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Retrieve the tag name from the created file
+          $tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
+
+          # Save the tag to the GitHub environment variable so that it can be accessed by subsequent steps
+          echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # Configure Git with the necessary information to create a tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create and push the tag to GitHub
+          git tag $tag
+          git push origin $tag
+
+          # Debugging: Output the tag to verify it's correct
+          echo "Tag created: $tag"
+
+      # Step 4: Debug builds folder
       - name: Debug builds folder
         run: |
           dir builds
-
-      # Step 4: Debug GitHub context
-      - name: Debug GitHub context
-        run: |
-          echo "Ref: ${{ github.ref }}"
-          echo "Tag: ${{ github.event.ref }}"
-          echo "Actor: ${{ github.actor }}"
 
       # Step 5: Upload binaries to GitHub Release
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: builds/*.exe # Ensure this matches the correct directory
+          files: builds/**/* # Ensure this matches the correct directory
+          tag_name: ${{ env.tag }}
+          name: Easy MinGW Installer v${{ env.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 7: Handle failure and upload logs
+      - name: Prepare logs on failure
+        if: failure() # Only runs if the workflow fails
+        run: |
+          $destinationDir = ".\logs"
+
+          if (-not (Test-Path -Path $destinationDir)) {
+              New-Item -ItemType Directory -Path $destinationDir
+          }
+
+          $logFiles = Get-ChildItem -Path . -Filter "*.log" -File
+          foreach ($file in $logFiles) {
+              Move-Item -Path $file.FullName -Destination $destinationDir
+          }
+      - name: Upload failure logs
+        if: failure() # Only runs if the workflow fails
+        uses: actions/upload-artifact@v3
+        with:
+          name: logs
+          path: logs/
