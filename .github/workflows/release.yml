@@ -3,8 +3,11 @@ name: Build and Upload Release
 on:
   push:
     tags:
-      - "*" # Trigger only on new version tags (e.g., 1.0.0)
+      - "*" # Trigger on new version tags (e.g., v1.0.0)
   workflow_dispatch: # Manual trigger
+
+permissions:
+  contents: write
 
 jobs:
   build-and-release:
@@ -20,10 +23,22 @@ jobs:
         run: |
           cmd /c run.bat
 
-      # Step 3: Upload binaries to GitHub release
+      # Step 3: Debug builds folder
+      - name: Debug builds folder
+        run: |
+          dir builds
+
+      # Step 4: Debug GitHub context
+      - name: Debug GitHub context
+        run: |
+          echo "Ref: ${{ github.ref }}"
+          echo "Tag: ${{ github.event.ref }}"
+          echo "Actor: ${{ github.actor }}"
+
+      # Step 5: Upload binaries to GitHub Release
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: builds/**/* # Upload all files from the builds folder
+          files: builds/*.exe # Ensure this matches the correct directory
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
