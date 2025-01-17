@@ -57,6 +57,9 @@ const
   CN_BASE = $BC00;
   CN_COMMAND = CN_BASE + WM_COMMAND;
 
+var
+  SkipInfoPage: Boolean;
+
 procedure ExitProcess(uExitCode: Integer);
   external 'ExitProcess@kernel32.dll stdcall';
 
@@ -78,12 +81,17 @@ begin
     if UserResponse = IDYES then
     begin
       UninstallExistingVersion;
+      SkipInfoPage := True;
     end
     else
     begin
       WizardForm.Close;
       ExitProcess(0);
     end;
+  end;
+  else
+  begin
+    SkipInfoPage := False;
   end;
 end;
 
@@ -96,6 +104,12 @@ procedure CurPageChanged(CurPageID: Integer);
 var
   Param: Longint;
 begin
+  if SkipInfoPage and (CurPageID = wpInfoBefore) then
+  begin
+    Param := 0 or BN_CLICKED shl 16;
+    PostMessage(WizardForm.NextButton.Handle, CN_COMMAND, Param, 0);
+  end;
+
   if CurPageID = wpReady then
   begin
     Param := 0 or BN_CLICKED shl 16;
