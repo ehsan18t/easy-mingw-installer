@@ -41,7 +41,7 @@ IF "%buildOnlyIfNewRelease%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -checkNewR
 IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -generateLogsAlways )
 
 @REM TestMode
-SET PowerShellCmd=%PowerShellCmd% -testMode
+@REM SET PowerShellCmd=%PowerShellCmd% -testMode
 
 @REM Run the build script
 %PowerShellCmd%
