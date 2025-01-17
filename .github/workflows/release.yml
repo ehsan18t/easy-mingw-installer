@@ -44,3 +44,24 @@ jobs:
           name: Easy MinGW Installer v${{ env.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 7: Handle failure and upload logs
+      - name: Upload logs on failure
+        if: failure() # Only runs if the workflow fails
+        run: |
+          $destinationDir = ".\logs"
+
+          if (-not (Test-Path -Path $destinationDir)) {
+              New-Item -ItemType Directory -Path $destinationDir
+          }
+
+          $logFiles = Get-ChildItem -Path . -Filter "*.log" -File
+          foreach ($file in $logFiles) {
+              Move-Item -Path $file.FullName -Destination $destinationDir
+          }
+      - name: Upload failure logs
+        uses: actions/upload-artifact@v3
+        if: failure() # Only runs if the workflow fails
+        with:
+          name: logs
+          path: logs/
