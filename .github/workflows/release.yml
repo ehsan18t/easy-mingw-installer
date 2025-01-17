@@ -1,10 +1,7 @@
-name: Build and Upload Release
+name: Build and Release with Auto Tagging
 
 on:
-  push:
-    tags:
-      - "*" # Trigger on new version tags (e.g., v1.0.0)
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,27 +15,32 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # Step 2: Run the build script
+      # Step 2: Run the build script including auto tagging
       - name: Run build script
         run: |
           cmd /c run.bat
 
-      # Step 3: Debug builds folder
+      # Step 3: Create and push the tag
+      - name: Create and push tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ env.tag }}
+          git push origin ${{ env.tag }}
+
+      # Step 4: Debug builds folder
       - name: Debug builds folder
         run: |
           dir builds
-
-      # Step 4: Debug GitHub context
-      - name: Debug GitHub context
-        run: |
-          echo "Ref: ${{ github.ref }}"
-          echo "Tag: ${{ github.event.ref }}"
-          echo "Actor: ${{ github.actor }}"
 
       # Step 5: Upload binaries to GitHub Release
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: builds/*.exe # Ensure this matches the correct directory
+          files: builds/**/* # Ensure this matches the correct directory
+          tag_name: ${{ env.tag }}
+          name: Easy MinGW Installer v${{ env.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
