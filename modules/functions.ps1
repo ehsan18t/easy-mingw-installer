@@ -223,7 +223,7 @@ function Build-Binary {
         $name = "Easy MinGW Installer"
         $version = $null
         if ($testMode) {
-            $version = "v2030.10.10"
+            $version = "2030.10.10"
         } else {
             $version = Format-Date -Date $selectedRelease.published_at -asVersion
         }
