@@ -151,6 +151,19 @@ function Get-LatestTag {
     return $latestTag
 }
 
+function Format-Date {
+    param (
+        [string]$Date,
+        [switch]$asVersion
+    )
+
+    if ($asVersion) {
+        return Get-Date -Date $Date -Format "yyyy.MM.dd"
+    }
+
+    return Get-Date -Date $Date -Format "dd-MMM-yyyy HH:mm:ss"
+}
+
 function Get-Release {
     param (
         [Parameter(Mandatory = $true)]
@@ -175,7 +188,7 @@ function Get-Release {
     }
 
     Write-Host " -> Selected Release: $($selectedRelease.name)"
-    $parsedTime = Get-Date -Date $selectedRelease.published_at -Format "dd-MMM-yyyy HH:mm:ss"
+    $parsedTime = Format-Date -Date $selectedRelease.published_at
     Write-Host " -> Release date: $parsedTime"
 
     return $selectedRelease

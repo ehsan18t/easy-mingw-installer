@@ -78,7 +78,7 @@ function main {
             if ($selectedAsset) {
                 # Set the variables for Inno Setup
                 $name = "Easy MinGW Installer"
-                $version = Get-Date -Date $selectedRelease.published_at -Format "yyyy.MM.dd"
+                $version = Format-Date -Date $selectedRelease.published_at -asVersion
 
                 # Check if new release is available
                 if ($checkNewRelease) {
