@@ -25,6 +25,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "Creating tag ${{ env.tag }}..." 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag ${{ env.tag }}
@@ -46,7 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Step 7: Handle failure and upload logs
-      - name: Upload logs on failure
+      - name: Prepare logs on failure
         if: failure() # Only runs if the workflow fails
         run: |
           $destinationDir = ".\logs"
@@ -60,8 +61,8 @@ jobs:
               Move-Item -Path $file.FullName -Destination $destinationDir
           }
       - name: Upload failure logs
-        uses: actions/upload-artifact@v3
         if: failure() # Only runs if the workflow fails
+        uses: actions/upload-artifact@v3
         with:
           name: logs
           path: logs/

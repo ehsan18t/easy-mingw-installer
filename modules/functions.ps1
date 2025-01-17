@@ -228,6 +228,11 @@ function Build-Binary {
             $version = Format-Date -Date $selectedRelease.published_at -asVersion
         }
 
+        # Set Tag in ENV for GitHub Actions
+        if ($env:GITHUB_ACTIONS -eq "true") {
+            echo "tag=$version" >> $GITHUB_ENV
+        }
+
         # Check if new release is available
         if ($checkNewRelease) {
             if ($latestTag -eq $version) {
@@ -244,11 +249,6 @@ function Build-Binary {
             New-Item -Path $dummyFilePath -ItemType File -Force | Out-Null
             New-Item -Path $dummyVersionInfoPath -ItemType File -Force | Out-Null
         } else {
-            # Set Tag in ENV for GitHub Actions
-            if ($env:GITHUB_ACTIONS -eq "true") {
-                echo "tag=$version" >> $GITHUB_ENV
-            }
-
             # Get the asset download URL, name, and size
             $assetUrl = $selectedAsset.browser_download_url
             $assetName = $selectedAsset.name
