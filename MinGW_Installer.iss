@@ -38,8 +38,10 @@ SolidCompression=yes
 WizardStyle=modern
 ChangesEnvironment=yes
 InfoBeforeFile="{#SourcePath}\version_info.txt"
-DisableDirPage=auto
-DisableProgramGroupPage=auto
+DisableWelcomePage=yes
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+DisableReadyPage=yes
 
 [Languages]
 Name: "english"; MessagesFile: "inno\lang\English.isl"
@@ -49,6 +51,12 @@ Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion re
 Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 
 [Code]
+const
+  BN_CLICKED = 0;
+  WM_COMMAND = $0111;
+  CN_BASE = $BC00;
+  CN_COMMAND = CN_BASE + WM_COMMAND;
+
 procedure ExitProcess(uExitCode: Integer);
   external 'ExitProcess@kernel32.dll stdcall';
 
@@ -82,6 +90,17 @@ end;
 procedure InitializeWizard();
 begin
   CheckForExistingInstallation;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Param: Longint;
+begin
+  if CurPageID = wpReady then
+  begin
+    Param := 0 or BN_CLICKED shl 16;
+    PostMessage(WizardForm.NextButton.Handle, CN_COMMAND, Param, 0);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
