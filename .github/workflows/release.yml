@@ -3,7 +3,7 @@ name: Build and Upload Release
 on:
   push:
     tags:
-      - "v*" # Trigger only on new version tags (e.g., v1.0.0)
+      - "*" # Trigger only on new version tags (e.g., 1.0.0)
 
 jobs:
   build-and-release:
