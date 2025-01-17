@@ -25,7 +25,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $env:tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
+          $tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
           echo "tag=$tag" >> $GITHUB_ENV
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
