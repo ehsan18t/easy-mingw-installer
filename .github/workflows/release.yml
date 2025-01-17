@@ -25,16 +25,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Retrieve the tag name from the created file
+          $tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
+
+          # Save the tag to the GitHub environment variable so that it can be accessed by subsequent steps
+          echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
           # Configure Git with the necessary information to create a tag
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Create and push the tag to GitHub
-          git tag ${{ env.tag }}
-          git push origin ${{ env.tag }}
+          git tag $tag
+          git push origin $tag
 
           # Debugging: Output the tag to verify it's correct
-          echo "Tag created: ${{ env.tag }}"
+          echo "Tag created: $tag"
 
       # Step 4: Debug builds folder
       - name: Debug builds folder

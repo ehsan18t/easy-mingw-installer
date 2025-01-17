@@ -230,7 +230,7 @@ function Build-Binary {
 
         # Set Tag in ENV for GitHub Actions
         if ($env:GITHUB_ACTIONS -eq "true") {
-            ECHO "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            New-Item -Path tag -Name "$version" -ItemType "file" -Force
         }
 
         # Check if new release is available
