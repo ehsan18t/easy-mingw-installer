@@ -40,6 +40,9 @@ SET PowerShellCmd=%PowerShellCmd% -outputPath "%outputPath%" -InnoSetupPath "%In
 IF "%buildOnlyIfNewRelease%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -checkNewRelease )
 IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -generateLogsAlways )
 
+@REM TestMode
+@REM SET PowerShellCmd=%PowerShellCmd% -testMode
+
 @REM Run the build script
 %PowerShellCmd%
 
