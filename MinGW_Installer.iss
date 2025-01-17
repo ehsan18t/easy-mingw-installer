@@ -89,10 +89,6 @@ begin
       ExitProcess(0);
     end;
   end;
-  else
-  begin
-    SkipInfoPage := False;
-  end;
 end;
 
 procedure InitializeWizard();
