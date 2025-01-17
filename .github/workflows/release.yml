@@ -16,7 +16,8 @@ jobs:
 
       # Step 2: Run the build script
       - name: Run build script
-        run: run.bat
+        run: |
+          cmd /c run.bat
 
       # Step 3: Upload binaries to GitHub release
       - name: Upload binaries to GitHub Release
