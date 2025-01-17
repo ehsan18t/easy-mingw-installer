@@ -20,27 +20,16 @@ jobs:
         run: |
           cmd /c run.bat
 
-      # Step 3.1: Retrieve tag from file
-      - name: Retrieve tag
-        id: retrieve_tag
-        run: |
-          $tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
-          echo "Retrieved tag: $tag"
-          echo "tag=$tag" >> $GITHUB_ENV
-
-      # Step 3.2: Configure Git
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      # Step 3.3: Create and push tag
-      - name: Create and push tag
+      # Step 3: Retrieve tag from file
+      - name: Retrieve and Create tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git tag ${{ env.tag }}
-          git push origin ${{ env.tag }}
+          $tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag $tag
+          git push origin $tag
 
       # Step 4: Debug builds folder
       - name: Debug builds folder
