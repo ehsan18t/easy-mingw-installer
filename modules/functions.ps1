@@ -231,19 +231,28 @@ function Build-Binary {
         $assetUrl = $selectedAsset.browser_download_url
         $assetName = $selectedAsset.name
 
-        # Set the destination path for the downloaded asset in the current directory
-        $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
+        if ($testMode) {
+            Write-Host " -> TEST MODE: Skipping download and extraction."
+            # make directory at "\mingw$Arch" with a dummy file
+            $dummyFilePath = Join-Path -Path $tempDir -ChildPath "\mingw$Arch\dummy.txt"
+            $dummyVersionInfoPath = Join-Path -Path $tempDir -ChildPath "\version_info.txt"
+            New-Item -Path $dummyFilePath -ItemType File -Force | Out-Null
+            New-Item -Path $dummyVersionInfoPath -ItemType File -Force | Out-Null
+        } else {
+            # Set the destination path for the downloaded asset in the current directory
+            $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
 
-        # Download the asset
-        Write-Host " -> Downloading {TEMP_DIR}/$assetName"
-        Download-File -Url $assetUrl -FileName $destinationPath
-        $downloadedFilePath = $tempDir + "\$assetName"
+            # Download the asset
+            Write-Host " -> Downloading {TEMP_DIR}/$assetName"
+            Download-File -Url $assetUrl -FileName $destinationPath
+            $downloadedFilePath = $tempDir + "\$assetName"
 
-        # Extract the downloaded file
-        Write-Host " -> Extracting {TEMP_DIR}/$assetName"
-        $unzipDestination = $tempDir
-        Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
-        $extractedFolderPath = "\mingw$Arch"
+            # Extract the downloaded file
+            Write-Host " -> Extracting {TEMP_DIR}/$assetName"
+            $unzipDestination = $tempDir
+            Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
+            $extractedFolderPath = "\mingw$Arch"
+        }
 
         # Set the SourcePath for Inno Setup
         $sourcePath = Join-Path -Path $tempDir -ChildPath $extractedFolderPath

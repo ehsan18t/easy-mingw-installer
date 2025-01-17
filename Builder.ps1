@@ -21,7 +21,10 @@ param(
     [switch]$checkNewRelease,
 
     [Parameter(Mandatory = $false)]
-    [switch]$generateLogsAlways
+    [switch]$generateLogsAlways,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$testMode
 )
 
 ################
@@ -64,7 +67,9 @@ function main {
             Build-Binary -Arch $archs[$i] -Pattern $namePatterns[$i]
         }
 
-        Remove-Item -Path $tempDir -Recurse -Force
+        if (Test-Path $tempDir) {
+            Remove-Item -Path $tempDir -Recurse -Force
+        }
     } else {
         Write-Host " -> ERROR: Arrays are not of the same length."
         Exit 1
