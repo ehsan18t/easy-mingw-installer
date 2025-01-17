@@ -1,0 +1,27 @@
+name: Build and Upload Release
+
+on:
+  push:
+    tags:
+      - "v*" # Trigger only on new version tags (e.g., v1.0.0)
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      # Step 1: Check out the repository
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2: Run the build script
+      - name: Run build script
+        run: run.bat
+
+      # Step 3: Upload binaries to GitHub release
+      - name: Upload binaries to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: builds/**/* # Upload all files from the builds folder
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
