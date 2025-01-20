@@ -40,7 +40,7 @@ function Download-File {
     $targetStream.Dispose()
     $responseStream.Dispose()
 
-    Write-Host "`n    *** Download completed ***"
+    Write-Color "`n    Download Completed!" $colors.Green
 }
 
 function Extract-7z {
@@ -53,7 +53,7 @@ function Extract-7z {
     )
 
     if (-not (Test-Path $7ZipPath)) {
-        Write-Host " -> ERROR: 7-Zip executable not found at '$7ZipPath'. Please make sure 7-Zip is installed or update the path to the 7z.exe file."
+        Write-Color " -> ERROR: 7-Zip executable not found at '$7ZipPath'. Please make sure 7-Zip is installed or update the path to the 7z.exe file." $colors.Red
         return
     }
 
@@ -70,10 +70,10 @@ function Extract-7z {
     $process.WaitForExit()
 
     if ($process.ExitCode -eq 0) {
-        Write-Host "    *** Extraction Completed ***"
+        Write-Color "    Extraction Completed!" $colors.Green
     }
     else {
-        Write-Host " -> ERROR: Error occurred during extraction."
+        Write-Color " -> ERROR: Error occurred during extraction." $colors.Red
     }
 }
 
@@ -87,10 +87,10 @@ function Remove-Folder {
     if (Test-Path $FolderPath) {
         # Remove the folder and its contents recursively
         Remove-Item -Path $FolderPath -Recurse -Force
-        Write-Host "     *** Removed '$FolderPath' ***"
+        Write-Color "     Removed '$FolderPath'!" $colors.Green
     }
     else {
-        Write-Host " -> ERROR: Folder '$FolderPath' not found."
+        Write-Color " -> ERROR: Folder '$FolderPath' not found." $colors.Red
     }
 }
 
@@ -125,14 +125,14 @@ function Build-Installer {
         $stdOutContent + $stdErrContent | Out-File -FilePath $logFile
 
         if ($exitCode -ne 0) {
-            Write-Host " -> ERROR: Building $Name Failed! Check the log file for details: $logFile"
-            Exit 1
+            Write-Error "ERROR" "Building $Name Failed!" $logFile $exitCode
         } else {
-            Write-Host "    *** Building $Name Succeeded! ***"
-            Write-Host " -> Check the log file for details: $logFile"
+            Write-Color "    Building $Name Succeeded!" $colors.Green
+            Write-Color " >> Check the log file for details: " $colors.Yellow -NoNewline
+            Write-Color $logFile $colors.Cyan
         }
     } else {
-        Write-Host "    *** Building $Name Succeeded! ***"
+        Write-Color "    Building $Name Succeeded!" $colors.Green
     }
 
     Remove-Item -Path $tempStdOutFile, $tempStdErrFile
@@ -149,7 +149,7 @@ function Get-LatestTag {
     $tagsInfo = Invoke-RestMethod -Uri $tagsUrl
 
     $latestTag = $tagsInfo[0].name
-    Write-Host " -> Latest EMI Tag: $latestTag"
+    Write-Info "Latest EMI Tag" $latestTag -MessageColor $colors.Cyan
     return $latestTag
 }
 
@@ -189,9 +189,9 @@ function Get-Release {
         }
     }
 
-    Write-Host " -> Selected Release: $($selectedRelease.name)"
+    Write-Info "Selected Release" $selectedRelease.name
     $parsedTime = Format-Date -Date $selectedRelease.published_at
-    Write-Host " -> Release date: $parsedTime"
+    Write-Info "Release date" $parsedTime -MessageColor $colors.Cyan
 
     return $selectedRelease
 }
@@ -204,7 +204,8 @@ function Build-Binary {
         [string]$Pattern
     )
 
-    Write-Host "`n -> Arch: $Arch-bit"
+    Write-Host "`n"
+    Write-Info "Arch" $Arch-bit -MessageColor $colors.Cyan
     # Write-Host " -> Pattern: $pattern"
 
     $selectedAsset = $null
@@ -212,9 +213,9 @@ function Build-Binary {
         $selectedAsset = @{ name = "mingw-w64-$Arch-Test.7z" }
     } elseif ($selectedRelease) {
         $selectedAsset = $selectedRelease.assets | Where-Object { $_.name -match $Pattern }
-        Write-Host " -> Selected Asset: $($selectedAsset.name)"
+        Write-Info "Selected Asset" $selectedAsset.name
     } else {
-        Write-Host " ERROR: No release found that match the filter criteria."
+        Write-Error "ERROR" "No release found that match the filter criteria."
         Exit 1
     }
 
@@ -236,13 +237,15 @@ function Build-Binary {
         # Check if new release is available
         if ($checkNewRelease) {
             if ($latestTag -eq $version) {
-                Write-Host " -> NO NEW RELEASE AVAILABLE.`n"
+                Write-Color "   ----------------------------" $colors.Yellow
+                Write-Color "   | NO NEW RELEASE AVAILABLE |" $colors.Yellow
+                Write-Color "   ----------------------------`n" $colors.Yellow
                 Exit 0
             }
         }
 
         if ($testMode) {
-            Write-Host " -> TEST MODE: Skipping download and extraction."
+            Write-Warnings "TEST MODE" "Skipping download and extraction."
             # make directory at "\mingw$Arch" with a dummy file
             $dummyFilePath = Join-Path -Path $tempDir -ChildPath "\mingw$Arch\dummy.txt"
             $dummyVersionInfoPath = Join-Path -Path $tempDir -ChildPath "\version_info.txt"
@@ -257,12 +260,12 @@ function Build-Binary {
             $destinationPath = Join-Path -Path $tempDir -ChildPath $assetName
 
             # Download the asset
-            Write-Host " -> Downloading {TEMP_DIR}/$assetName"
+            Write-Actions "Downloading" "{TEMP_DIR}/$assetName"
             Download-File -Url $assetUrl -FileName $destinationPath
             $downloadedFilePath = $tempDir + "\$assetName"
 
             # Extract the downloaded file
-            Write-Host " -> Extracting {TEMP_DIR}/$assetName"
+            Write-Actions "Extracting" "{TEMP_DIR}/$assetName"
             $unzipDestination = $tempDir
             Extract-7z -ArchivePath $downloadedFilePath -DestinationPath $unzipDestination
             $extractedFolderPath = "\mingw$Arch"
@@ -272,10 +275,10 @@ function Build-Binary {
         $sourcePath = Join-Path -Path $tempDir -ChildPath $extractedFolderPath
 
         # Build the installer
-        Write-Host " -> Building $name"
+        Write-Actions "Building" "$name"
         Build-Installer -Name $name -Version $version -SourcePath $sourcePath
     } else {
-        Write-Host " -> ERROR: No asset matching the pattern was found."
+        Write-Error "ERROR" "No asset matching the pattern was found."
         Exit 1
     }
 }
