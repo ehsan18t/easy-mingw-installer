@@ -30,6 +30,7 @@ param(
 ################
 # Load modules #
 ################
+. "$PSScriptRoot\modules\pretty.ps1"
 . "$PSScriptRoot\modules\functions.ps1"
 
 ###############
@@ -43,9 +44,12 @@ if (Test-Path $tempDir) {
     Remove-Item -Path $tempDir -Recurse -Force
 }
 
+Write-Log "7-Zip" $7ZipPath
+Write-Log "Inno Setup" "$InnoSetupPath `n"
+
 New-Item -ItemType Directory -Path $tempDir | Out-Null
-Write-Host " -> Temp Directory: $tempDir"
-Write-Host " -> Output Directory: $outputPath `n"
+Write-Log "Temp Directory" $tempDir $colors.Gray
+Write-Log "Output Directory" "$outputPath `n" $colors.Gray
 
 #################
 # MAIN FUNCTION #
@@ -79,7 +83,7 @@ function main {
             Remove-Item -Path $tempDir -Recurse -Force
         }
     } else {
-        Write-Host " -> ERROR: Arrays are not of the same length."
+        Write-Color " -> ERROR: Arrays are not of the same length." $colors.Red
         Exit 1
     }
 }

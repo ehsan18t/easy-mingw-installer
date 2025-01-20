@@ -51,9 +51,6 @@ CALL :END
 :CheckApps
 CALL :CheckAppInstalled "Inno Setup" "InnoSetup" "Inno Setup 6\ISCC.exe"
 CALL :CheckAppInstalled "7-Zip" "SevenZip" "7-Zip\7z.exe"
-
-ECHO -^> 7-Zip: %SevenZip%
-ECHO -^> Inno Setup: %InnoSetup%
 ECHO.
 EXIT /B
 
