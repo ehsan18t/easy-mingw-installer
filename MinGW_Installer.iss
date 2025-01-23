@@ -93,6 +93,7 @@ end;
 
 procedure InitializeWizard;
 begin
+  CheckForExistingInstallation;
   WizardForm.InfoBeforeClickLabel.Hide;
 end;
 
