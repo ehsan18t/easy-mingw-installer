@@ -251,6 +251,20 @@ function Build-Binary {
             $dummyVersionInfoPath = Join-Path -Path $tempDir -ChildPath "\version_info.txt"
             New-Item -Path $dummyFilePath -ItemType File -Force | Out-Null
             New-Item -Path $dummyVersionInfoPath -ItemType File -Force | Out-Null
+            $lines = @(
+                "THIS IS A TEST INSTALLER",
+                "winlibs personal build version gcc-14.2.0-mingw-w64ucrt-12.0.0-r2",
+                "This is the winlibs Intel/AMD 64-bit standalone build of:",
+                "- GCC 14.2.0",
+                "- GDB 15.2",
+                "- MinGW-w64 12.0.0 (linked with ucrt)",
+                "- GNU Binutils 2.43.1",
+                "- GNU Make 4.4.1",
+                "- PExports 0.47",
+                "- dos2unix 7.5.2",
+                "- Yasm 1.3.0"
+            )
+            Set-Content -Path $dummyVersionInfoPath -Value $lines
         } else {
             # Get the asset download URL, name, and size
             $assetUrl = $selectedAsset.browser_download_url
