@@ -91,9 +91,9 @@ begin
   end;
 end;
 
-procedure InitializeWizard();
+procedure InitializeWizard;
 begin
-  CheckForExistingInstallation;
+  WizardForm.InfoBeforeClickLabel.Hide;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

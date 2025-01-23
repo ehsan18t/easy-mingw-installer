@@ -88,7 +88,7 @@ TranslatorNote=
 
 ; *** Buttons
 ButtonBack=< &Back
-ButtonNext=&Next >
+ButtonNext=&Install
 ButtonInstall=&Install
 ButtonOK=OK
 ButtonCancel=Cancel
@@ -131,7 +131,7 @@ LicenseAccepted=I &accept the agreement
 LicenseNotAccepted=I &do not accept the agreement
 
 ; *** "Information" wizard pages
-WizardInfoBefore=Version Info
+WizardInfoBefore=Package Info
 InfoBeforeLabel=Details regarding the packages included in this build.
 InfoBeforeClickLabel=When you are ready to continue with Setup, click Next.
 WizardInfoAfter=Information
