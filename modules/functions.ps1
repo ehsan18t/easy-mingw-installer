@@ -231,7 +231,7 @@ function Build-Binary {
 
         # Set Tag in ENV for GitHub Actions
         if ($env:GITHUB_ACTIONS -eq "true") {
-            New-Item -Path tag -Name "$version" -ItemType "file" -Force
+            New-Item -Path tag -Name "$version" -ItemType "file" -Force | Out-Null
         }
 
         # Check if new release is available
