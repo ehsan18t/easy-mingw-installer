@@ -49,7 +49,7 @@
 
 <br>
 
-## ⬇ **Downloads**
+## 📥 **Downloads**
 
 <br>
 
