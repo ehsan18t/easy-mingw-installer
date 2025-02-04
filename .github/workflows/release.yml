@@ -74,7 +74,7 @@ jobs:
           }
       - name: Upload failure logs
         if: failure() # Only runs if the workflow fails
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: logs
           path: logs/
