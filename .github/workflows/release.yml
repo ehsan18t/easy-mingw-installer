@@ -77,7 +77,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           # draft: true # Set to false if you want to publish immediately
-          draft: false # Or keep true if manual review is preferred before publishing
+          draft: true
           files: builds/**/*
           tag_name: ${{ env.tag }}
           name: Easy MinGW Installer v${{ env.tag }}
