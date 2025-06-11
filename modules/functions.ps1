@@ -522,7 +522,7 @@ Please check out https://winlibs.com/ for the latest personal build.
             # Ensure arguments that might contain spaces are quoted if necessary for the command line,
             # but PowerShell will handle passing them as distinct arguments to Start-Process.
             $pythonScriptArgs = @(
-                "--input-file", """$currentBuildInfoFilePath"""
+                "--input-file", """$winlibsInfoFile"""
                 "--output-file", """$releaseNotesBodyFinalPath"""
                 "--prev-tag", """$effectivePrevTag"""
                 "--current-build-tag", """$releaseVersion"""
@@ -564,5 +564,3 @@ Please check out https://winlibs.com/ for the latest personal build.
         return $false
     }
 }
-
-# ... (Rest of functions.ps1)
