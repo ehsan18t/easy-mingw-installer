@@ -1,4 +1,4 @@
-$colors = @{
+$script:colors = @{ # Using script scope explicitly for clarity
     Black        = "Black"
     DarkBlue     = "DarkBlue"
     DarkGreen    = "DarkGreen"
@@ -18,96 +18,129 @@ $colors = @{
 }
 
 # Function to print colored output
-function Write-Color($Text, $Color, [switch]$NoNewline) {
+function Write-ColoredHost {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [System.ConsoleColor]$ForegroundColor,
+        [switch]$NoNewline
+    )
     if ($NoNewline) {
-        Write-Host -NoNewline $Text -ForegroundColor $Color
+        Write-Host -Object $Text -ForegroundColor $ForegroundColor -NoNewline
     } else {
-        Write-Host $Text -ForegroundColor $Color
+        Write-Host -Object $Text -ForegroundColor $ForegroundColor
     }
 }
 
-function Write-Text {
+function Write-FormattedLine {
+    [CmdletBinding()]
     param (
-        [string]$Indicator = ">>",
+        [Parameter(Mandatory = $true)]
+        [string]$Indicator,
+        [Parameter(Mandatory = $true)]
         [string]$Type,
+        [Parameter(Mandatory = $true)]
         [string]$Message,
-        $IndicatorColor = $colors.White,
-        $TypeColor = $colors.White,
-        $MessageColor = $colors.DarkCyan
+        [Parameter(Mandatory = $true)]
+        [System.ConsoleColor]$IndicatorColor,
+        [Parameter(Mandatory = $true)]
+        [System.ConsoleColor]$TypeColor,
+        [Parameter(Mandatory = $true)]
+        [System.ConsoleColor]$MessageColor
     )
-
-    Write-Color " $Indicator " $IndicatorColor -NoNewline
-    Write-Color "$($Type): " $TypeColor -NoNewline
-    Write-Color "$Message" $MessageColor
+    Write-ColoredHost -Text " $Indicator " -ForegroundColor $IndicatorColor -NoNewline
+    Write-ColoredHost -Text "$($Type): " -ForegroundColor $TypeColor -NoNewline
+    Write-ColoredHost -Text $Message -ForegroundColor $MessageColor
 }
 
-function Write-Log {
+function Write-LogEntry {
+    [CmdletBinding()]
     param (
+        [Parameter(Mandatory = $true)]
         [string]$Type,
+        [Parameter(Mandatory = $true)]
         [string]$Message,
-        $TypeColor = $colors.White,
-        $MessageColor = $colors.DarkCyan
+        [System.ConsoleColor]$TypeColor = $script:colors.White,
+        [System.ConsoleColor]$MessageColor = $script:colors.DarkCyan
     )
-
-    Write-Text "->" $Type $Message $colors.Blue $TypeColor $MessageColor
+    Write-FormattedLine -Indicator "->" -Type $Type -Message $Message -IndicatorColor $script:colors.Blue -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
-function Write-Info {
+function Write-StatusInfo {
+    [CmdletBinding()]
     param (
+        [Parameter(Mandatory = $true)]
         [string]$Type,
+        [Parameter(Mandatory = $true)]
         [string]$Message,
-        $TypeColor = $colors.White,
-        $MessageColor = $colors.Yellow
+        [System.ConsoleColor]$TypeColor = $script:colors.White,
+        [System.ConsoleColor]$MessageColor = $script:colors.Yellow
     )
-
-    Write-Text ">>" $Type $Message $colors.Magenta $TypeColor $MessageColor
+    Write-FormattedLine -Indicator ">>" -Type $Type -Message $Message -IndicatorColor $script:colors.Magenta -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
-function Write-Warnings {
+function Write-WarningMessage {
+    [CmdletBinding()]
     param (
+        [Parameter(Mandatory = $true)]
         [string]$Type,
+        [Parameter(Mandatory = $true)]
         [string]$Message,
-        $TypeColor = $colors.DarkYellow,
-        $MessageColor = $colors.DarkRed
+        [System.ConsoleColor]$TypeColor = $script:colors.DarkYellow,
+        [System.ConsoleColor]$MessageColor = $script:colors.DarkRed
     )
-
-    Write-Text ">>" $Type $Message $colors.Red $TypeColor $MessageColor
+    Write-FormattedLine -Indicator "!!" -Type $Type -Message $Message -IndicatorColor $script:colors.Red -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
-function Write-Actions {
+function Write-ActionProgress {
+    [CmdletBinding()]
     param (
-        [string]$Type,
-        [string]$Message,
-        $TypeColor = $colors.White,
-        $MessageColor = $colors.Yellow
+        [Parameter(Mandatory = $true)]
+        [string]$ActionName, # e.g., "Downloading", "Extracting"
+        [Parameter(Mandatory = $true)]
+        [string]$Details,    # e.g., "filename.zip" or progress info
+        [System.ConsoleColor]$ActionColor = $script:colors.White,
+        [System.ConsoleColor]$DetailsColor = $script:colors.Yellow
     )
-
-    Write-Color " >> " $colors.DarkYellow -NoNewline
-    Write-Color "$($Type) " $TypeColor -NoNewline
-    Write-Color "$Message" $MessageColor
+    Write-ColoredHost -Text " >> " -ForegroundColor $script:colors.DarkYellow -NoNewline
+    Write-ColoredHost -Text "$($ActionName) " -ForegroundColor $ActionColor -NoNewline
+    Write-ColoredHost -Text $Details -ForegroundColor $DetailsColor
 }
 
-function Write-Error {
+function Write-ErrorMessage {
+    [CmdletBinding()]
     param (
-        [string]$Type,
+        [Parameter(Mandatory = $true)]
+        [string]$ErrorType, # e.g., "ERROR", "CRITICAL"
+        [Parameter(Mandatory = $true)]
         [string]$Message,
-        [string]$logs,
-        [int]$exitCode = 0,
-        $TypeColor = $colors.DarkRed,
-        $MessageColor = $colors.Red
+        [string]$LogFilePath,
+        [int]$AssociatedExitCode = 0,
+        [System.ConsoleColor]$TypeColor = $script:colors.DarkRed,
+        [System.ConsoleColor]$MessageColor = $script:colors.Red
     )
+    Write-ColoredHost -Text " !! $($ErrorType): " -ForegroundColor $TypeColor -NoNewline
+    Write-ColoredHost -Text $Message -ForegroundColor $MessageColor
 
-    Write-Color " >> $($Type): " $TypeColor -NoNewline
-    Write-Color "$Message" $MessageColor
-
-    if ($exitCode -ne 0) {
-        Write-Color "    EXIT CODE: " $colors.DarkRed -NoNewline
-        Write-Color $exitCode $colors.Cyan
+    if ($AssociatedExitCode -ne 0) {
+        Write-ColoredHost -Text "    Associated Exit Code: " -ForegroundColor $script:colors.DarkRed -NoNewline
+        Write-ColoredHost -Text $AssociatedExitCode -ForegroundColor $script:colors.Cyan
     }
-
-    if ($logs) {
-        Write-Color " >> " $colors.DarkYellow -NoNewline
-        Write-Color "Check the log file for details: " $colors.Yellow -NoNewline
-        Write-Color $logs $colors.Cyan
+    if ($LogFilePath) {
+        Write-ColoredHost -Text " >> " -ForegroundColor $script:colors.DarkYellow -NoNewline
+        Write-ColoredHost -Text "Log: " -ForegroundColor $script:colors.Yellow -NoNewline
+        Write-ColoredHost -Text $LogFilePath -ForegroundColor $script:colors.Cyan
     }
+}
+
+function Write-SeparatorLine {
+    [CmdletBinding()]
+    param(
+        [string]$Character = "-",
+        [int]$Length = 50,
+        [System.ConsoleColor]$Color = $script:colors.DarkGray
+    )
+    Write-ColoredHost -Text ($Character * $Length) -ForegroundColor $Color
 }

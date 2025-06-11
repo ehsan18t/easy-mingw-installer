@@ -1,91 +1,141 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$titlePattern,
-
     [Parameter(Mandatory = $true)]
     [string[]]$archs,
-
     [Parameter(Mandatory = $true)]
     [string[]]$namePatterns,
-
     [Parameter(Mandatory = $true)]
     [string]$outputPath,
-
     [Parameter(Mandatory = $true)]
     [string]$7ZipPath,
-
     [Parameter(Mandatory = $true)]
     [string]$InnoSetupPath,
-
     [Parameter(Mandatory = $false)]
     [switch]$checkNewRelease,
-
     [Parameter(Mandatory = $false)]
     [switch]$generateLogsAlways,
-
     [Parameter(Mandatory = $false)]
     [switch]$testMode
 )
 
-################
-# Load modules #
-################
+# --- Script Setup ---
+$ErrorActionPreference = "Stop" # Exit on unhandled errors
 . "$PSScriptRoot\modules\pretty.ps1"
 . "$PSScriptRoot\modules\functions.ps1"
 
-###############
-# Prepare ENV #
-###############
-if ($archs.Count -eq 1) { $archs = $archs.Split(',') }
-if ($namePatterns.Count -eq 1) { $namePatterns = $namePatterns.Split(',') }
+# --- Environment Preparation ---
+Write-StatusInfo -Type "Script Start" -Message "Easy MinGW Installer Builder"
+Write-SeparatorLine
 
-$tempDir = [System.IO.Path]::GetTempPath() + "EasyMinGWInstaller"
-if (Test-Path $tempDir) {
-    Remove-Item -Path $tempDir -Recurse -Force
+# Handle array parameters passed as single comma-separated strings
+if ($archs.Count -eq 1 -and $archs[0].Contains(',')) {
+    $archs = $archs[0].Split(',') | ForEach-Object { $_.Trim() }
+}
+if ($namePatterns.Count -eq 1 -and $namePatterns[0].Contains(',')) {
+    $namePatterns = $namePatterns[0].Split(',') | ForEach-Object { $_.Trim() }
 }
 
-Write-Log "7-Zip" $7ZipPath
-Write-Log "Inno Setup" "$InnoSetupPath `n"
+$baseTempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "EasyMinGWInstaller_Build"
+if (Test-Path $baseTempDir) {
+    Remove-DirectoryRecursive -Path $baseTempDir
+}
+New-Item -ItemType Directory -Path $baseTempDir -Force | Out-Null
 
-New-Item -ItemType Directory -Path $tempDir | Out-Null
-Write-Log "Temp Directory" $tempDir $colors.Gray
-Write-Log "Output Directory" "$outputPath `n" $colors.Gray
+$innoSetupScript = Join-Path -Path $PSScriptRoot -ChildPath "MinGW_Installer.iss"
+if (-not (Test-Path $innoSetupScript -PathType Leaf)) {
+    Write-ErrorMessage -ErrorType "CRITICAL CONFIG" -Message "Inno Setup script not found: $innoSetupScript"
+    Exit 1
+}
 
-#################
-# MAIN FUNCTION #
-#################
-function main {
-    # Get the latest EMI tag
-    $latestTag = ""
-    if ($testMode) {
-        $latestTag = "v2030.01.01"
-    } else {
-        $latestTag = Get-LatestTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+Write-LogEntry -Type "7-Zip Path" -Message $7ZipPath
+Write-LogEntry -Type "InnoSetup Path" -Message $InnoSetupPath
+Write-LogEntry -Type "InnoSetup Script" -Message $innoSetupScript
+Write-LogEntry -Type "Base Temp Directory" -Message $baseTempDir
+Write-LogEntry -Type "Final Output Directory" -Message $outputPath
+Write-SeparatorLine
+
+# --- Main Build Logic ---
+function Main {
+    Write-StatusInfo -Type "Main Process" -Message "Starting build operations..."
+
+    $projectLatestTag = $null
+    if ($checkNewRelease -and -not $testMode) {
+        $projectLatestTag = Get-LatestGitHubTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+        if (-not $projectLatestTag) {
+            Write-WarningMessage -Type "Tag Check" -Message "Could not retrieve latest project tag. Version check might be affected."
+        }
+    } elseif ($testMode) {
+        $projectLatestTag = "v2030.01.01" # Example for testing version check logic
+        Write-StatusInfo -Type "Tag (Test Mode)" -Message $projectLatestTag
     }
 
-    # Set the GitHub repository details
-    $owner = "brechtsanders"
-    $repo = "winlibs_mingw"
-
-    # Filter releases based on the regular expression pattern in the title
-    $selectedRelease = $null
-    if (!$testMode) {
-        $selectedRelease = Get-Release -Owner $owner -Repo $repo -TitlePattern $titlePattern
-    }
-
-    # for loop to iterate over the archs
-    if ($archs.Length -eq $namePatterns.Length) {
-        for ($i = 0; $i -lt $archs.Length; $i++) {
-            Build-Binary -Arch $archs[$i] -Pattern $namePatterns[$i]
-        }
-
-        if (Test-Path $tempDir) {
-            Remove-Item -Path $tempDir -Recurse -Force
+    $winLibsReleaseInfo = $null
+    if (-not $testMode) {
+        $winLibsReleaseInfo = Find-GitHubRelease -Owner "brechtsanders" -Repo "winlibs_mingw" -TitlePattern $titlePattern
+        if (-not $winLibsReleaseInfo) {
+            Write-ErrorMessage -ErrorType "CRITICAL" -Message "No matching WinLibs release found for pattern: $titlePattern. Cannot proceed."
+            Exit 1 # Critical failure, cannot build anything
         }
     } else {
-        Write-Color " -> ERROR: Arrays are not of the same length." $colors.Red
+        Write-StatusInfo -Type "Release (Test Mode)" -Message "Skipping actual WinLibs release fetching."
+        # Create a dummy $winLibsReleaseInfo for test mode structure if needed by Process-MingwCompilation
+        $winLibsReleaseInfo = [PSCustomObject]@{ name = "Test Release"; published_at = (Get-Date).ToString("o"); assets = @() }
+    }
+
+    if ($archs.Length -ne $namePatterns.Length) {
+        Write-ErrorMessage -ErrorType "CRITICAL CONFIG" -Message "Mismatch between the number of architectures and name patterns."
         Exit 1
     }
+
+    $overallSuccess = $true
+    for ($i = 0; $i -lt $archs.Length; $i++) {
+        $currentArch = $archs[$i]
+        $currentPattern = $namePatterns[$i]
+        
+        Write-StatusInfo -Type "Initiating Build" -Message "Architecture: $currentArch-bit, Pattern: $currentPattern"
+        
+        $buildSuccess = Process-MingwCompilation -Architecture $currentArch `
+            -AssetPattern $currentPattern `
+            -WinLibsReleaseInfo $winLibsReleaseInfo `
+            -ProjectLatestTag $projectLatestTag `
+            -SevenZipExePath $7ZipPath `
+            -InnoSetupExePath $InnoSetupPath `
+            -FinalOutputPath $outputPath `
+            -TempDirectory $baseTempDir `
+            -InnoSetupScriptPath $innoSetupScript `
+            -SkipIfVersionMatchesTag:$checkNewRelease `
+            -GenerateLogsAlways:$generateLogsAlways `
+            -IsTestMode:$testMode
+        
+        if (-not $buildSuccess) {
+            Write-ErrorMessage -ErrorType "Architecture Build Failed" -Message "Failed to process $currentArch-bit architecture."
+            $overallSuccess = $false
+            # Decide if you want to stop on first failure or try other architectures
+            # For now, it continues to try other architectures.
+        }
+    }
+    return $overallSuccess
 }
 
-main
+# --- Script Execution & Cleanup ---
+$scriptSuccess = $false
+try {
+    $scriptSuccess = Main
+}
+catch {
+    Write-ErrorMessage -ErrorType "FATAL SCRIPT ERROR" -Message "An unhandled error occurred: $($_.Exception.ToString())"
+    $scriptSuccess = $false
+}
+finally {
+    Write-SeparatorLine
+    Write-StatusInfo -Type "Cleanup" -Message "Removing base temporary directory: $baseTempDir"
+    Remove-DirectoryRecursive -Path $baseTempDir # Cleanup base temp dir
+    
+    if ($scriptSuccess) {
+        Write-StatusInfo -Type "Script End" -Message "Build process completed successfully."
+    } else {
+        Write-ErrorMessage -ErrorType "Script End" -Message "Build process finished with errors."
+        Exit 1 # Ensure a non-zero exit code for CI/CD or automation
+    }
+}
