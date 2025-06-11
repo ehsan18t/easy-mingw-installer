@@ -360,16 +360,9 @@ function Process-MingwCompilation {
         Write-StatusInfo -Type "Asset (Test Mode)" -Message $selectedAsset.name
     } elseif ($WinLibsReleaseInfo) {
         $selectedAsset = $WinLibsReleaseInfo.assets | Where-Object { $_.name -match $AssetPattern } | Select-Object -First 1
-        if ($selectedAsset) {
-            Write-StatusInfo -Type "Asset Found" -Message $selectedAsset.name
-        } else {
-            Write-ErrorMessage -ErrorType "Asset Error" -Message "No asset found in release '$($WinLibsReleaseInfo.name)' matching pattern '$AssetPattern'."
-            return $false 
-        }
-    } else {
-        Write-ErrorMessage -ErrorType "Configuration Error" -Message "WinLibs release information not provided and not in test mode."
-        return $false
-    }
+        if ($selectedAsset) { Write-StatusInfo -Type "Asset Found" -Message $selectedAsset.name } 
+        else { Write-ErrorMessage -ErrorType "Asset Error" -Message "No asset found in release '$($WinLibsReleaseInfo.name)' matching pattern '$AssetPattern'."; return $false }
+    } else { Write-ErrorMessage -ErrorType "Configuration Error" -Message "WinLibs release information not provided and not in test mode."; return $false }
 
     $releaseVersion = $null 
     $winlibsPublishedDateForInfoFile = ""
@@ -386,14 +379,11 @@ function Process-MingwCompilation {
     }
     Write-StatusInfo -Type "New Release Tag" -Message $releaseVersion
 
-    # Create tag file for GitHub Actions
+    # Create tag file for GitHub Actions - this will run per arch if build proceeds
+    # If multiple archs produce the same tag, it's just overwritten, which is fine.
     if ($env:GITHUB_ACTIONS -eq "true") {
-        # Construct the path without Resolve-Path, as the directory might not exist yet.
-        # Get-Item on $PSScriptRoot gives a DirectoryInfo object, .Parent.FullName gets the parent dir.
-        $repoRootPath = (Get-Item $PSScriptRoot).Parent.FullName
-        $tagFileDir = Join-Path $repoRootPath "tag"
-        
-        # Ensure the directory exists before creating the file in it
+        $repoRootPathForTag = (Get-Item $PSScriptRoot).Parent.FullName
+        $tagFileDir = Join-Path $repoRootPathForTag "tag"
         if (-not (Test-Path $tagFileDir -PathType Container)) {
             New-Item -Path $tagFileDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
         }
@@ -402,7 +392,7 @@ function Process-MingwCompilation {
     }
 
     $proceedWithBuild = $true
-    if ($SkipIfVersionMatchesTag -and -not $IsTestMode) {
+    if ($SkipIfVersionMatchesTag.IsPresent -and -not $IsTestMode) { # Check .IsPresent for switches
         if (-not $ProjectLatestTag) {
             Write-WarningMessage -Type "Version Check" -Message "Project's latest tag not available. Proceeding with build."
         } elseif ($ProjectLatestTag -eq $releaseVersion) {
@@ -415,15 +405,14 @@ function Process-MingwCompilation {
     
     $archTempDir = Join-Path -Path $TempDirectory -ChildPath "mingw$Architecture" 
     $sourcePathForInstaller = Join-Path -Path $archTempDir -ChildPath "mingw$Architecture" # Initial assumption
-    $currentBuildInfoFilePath = Join-Path -Path $archTempDir -ChildPath "current_build_info.txt" # For Python script
+    $currentBuildInfoFilePath = Join-Path -Path $archTempDir -ChildPath "current_build_info.txt" # This is the input for Python
     
     # Path for the final release notes body in the repo root.
     # Construct the path without Resolve-Path, as the file won't exist until Python creates it.
     if (-not $repoRootPath) { # Ensure $repoRootPath is defined if not in GHA
          $repoRootPath = (Get-Item $PSScriptRoot).Parent.FullName
     }
-    $releaseNotesBodyFinalPath = Join-Path $repoRootPath 'release_notes_body.md'
-
+    $releaseNotesBodyFinalPath = Join-Path $repoRootPath 'release_notes_body.md' # Output of Python
 
     try {
         if (Test-Path $archTempDir) { Remove-DirectoryRecursive -Path $archTempDir } 
@@ -445,12 +434,8 @@ This build was compiled with GCC TEST.0 and packaged on $winlibsPublishedDateFor
             Set-Content -Path (Join-Path $sourcePathForInstaller "version_info.txt") -Value "Test Mode - GCC for $Architecture-bit" # Dummy version_info.txt
         } else {
             $downloadedFilePath = Join-Path -Path $archTempDir -ChildPath $selectedAsset.name
-            if (-not (Invoke-DownloadFile -Url $selectedAsset.browser_download_url -DestinationFile $downloadedFilePath)) {
-                throw "Download failed for $($selectedAsset.name)"
-            }
-            if (-not (Start-SevenZipExtraction -ArchivePath $downloadedFilePath -DestinationPath $archTempDir -SevenZipExePath $SevenZipExePath)) {
-                throw "Extraction failed for $($selectedAsset.name)"
-            }
+            if (-not (Invoke-DownloadFile -Url $selectedAsset.browser_download_url -DestinationFile $downloadedFilePath)) { throw "Download failed for $($selectedAsset.name)" }
+            if (-not (Start-SevenZipExtraction -ArchivePath $downloadedFilePath -DestinationPath $archTempDir -SevenZipExePath $SevenZipExePath)) { throw "Extraction failed for $($selectedAsset.name)" }
             
             # Auto-detect the actual extracted folder (e.g., mingw64, mingw32)
             # $sourcePathForInstaller was an initial assumption, now we find the actual one
@@ -466,18 +451,17 @@ This build was compiled with GCC TEST.0 and packaged on $winlibsPublishedDateFor
                 throw "Extracted MinGW folder not found"
             }
 
-            # --- Generate $currentBuildInfoFilePath from extracted content ---
-            $winlibsInfoFile = Join-Path -Path $sourcePathForInstaller -ChildPath "version_info.txt" # Or "readme.txt", etc.
-            if (Test-Path $winlibsInfoFile -PathType Leaf) {
-                Write-StatusInfo -Type "Changelog Source" -Message "Using '$winlibsInfoFile' for changelog input."
-                $fileContent = Get-Content -Path $winlibsInfoFile -Raw -Encoding UTF8
-                if ($fileContent -notmatch "packaged on") {
+
+            $winlibsInfoFileSource = Join-Path -Path $sourcePathForInstaller -ChildPath "version_info.txt" # Or "readme.txt", etc.
+            if (Test-Path $winlibsInfoFileSource -PathType Leaf) {
+                Write-StatusInfo -Type "Changelog Source" -Message "Using '$winlibsInfoFileSource' to create input for Python script."
+                $fileContent = Get-Content -Path $winlibsInfoFileSource -Raw -Encoding UTF8
+                if ($fileContent -notmatch "packaged on" -and $winlibsPublishedDateForInfoFile) {
                     $fileContent += "`nThis build was compiled with GCC (Version from file) and packaged on $winlibsPublishedDateForInfoFile."
                 }
                 Set-Content -Path $currentBuildInfoFilePath -Value $fileContent -Encoding UTF8
             } else {
-                Write-WarningMessage -Type "Changelog Source" -Message "Could not find '$winlibsInfoFile'. Using placeholder for '$currentBuildInfoFilePath'."
-                # Using the detailed placeholder you provided
+                Write-WarningMessage -Type "Changelog Source" -Message "Could not find '$winlibsInfoFileSource'. Using placeholder for '$currentBuildInfoFilePath'."
                 $placeholderInfoContent = @"
 winlibs personal build version gcc-15.1.0-mingw-w64ucrt-13.0.0-r2
 
@@ -513,39 +497,41 @@ Please check out https://winlibs.com/ for the latest personal build.
         }
 
         if ($proceedWithBuild) {
-            Write-StatusInfo -Type "Changelog Generation" -Message "Attempting to generate release notes body..."
-            $pythonPath = "python.exe" 
-            # Assuming $PSScriptRoot is C:\Users\Ehsan\Documents\Github\ehsan18t\easy-mingw-installer\modules
-            $pythonScriptItself = Join-Path -Path $PSScriptRoot -ChildPath "generate_changelog.py" 
-            $effectivePrevTag = if ([string]::IsNullOrEmpty($ProjectLatestTag)) { "HEAD" } else { $ProjectLatestTag }
+            # Conditional Changelog Generation
+            if (-not (Test-Path $releaseNotesBodyFinalPath)) {
+                if (Test-Path $currentBuildInfoFilePath) {
+                    Write-StatusInfo -Type "Changelog Generation" -Message "Attempting to generate release notes body..."
+                    $pythonPath = "python.exe" 
+                    $pythonScriptItself = Join-Path -Path $PSScriptRoot -ChildPath "generate_changelog.py" 
+                    $effectivePrevTag = if ([string]::IsNullOrEmpty($ProjectLatestTag)) { "HEAD" } else { $ProjectLatestTag }
 
-            # Ensure arguments that might contain spaces are quoted if necessary for the command line,
-            # but PowerShell will handle passing them as distinct arguments to Start-Process.
-            $pythonScriptArgs = @(
-                "--input-file", """$winlibsInfoFile"""
-                "--output-file", """$releaseNotesBodyFinalPath"""
-                "--prev-tag", """$effectivePrevTag"""
-                "--current-build-tag", """$releaseVersion"""
-                "--github-owner", "ehsan18t"
-                "--github-repo", "easy-mingw-installer"
-            )
-            
-            # Combine the script path and its arguments for Start-Process
-            $fullArgumentList = @($pythonScriptItself) + $pythonScriptArgs
-
-            Write-LogEntry -Type "Python Call" -Message "$pythonPath $($fullArgumentList -join ' ')"
-            
-            # Call Start-Process with the combined list
-            $processInfo = Start-Process -FilePath $pythonPath -ArgumentList $fullArgumentList -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
-            
-            if ($processInfo.ExitCode -ne 0) {
-                Write-WarningMessage -Type "Changelog Gen Failed" -Message "Python script exited with code $($processInfo.ExitCode). Check Python script output."
-            } elseif (Test-Path $releaseNotesBodyFinalPath) {
-                Write-SuccessMessage -Type "Changelog Generated" -Message "Release notes body created at $releaseNotesBodyFinalPath"
+                    $pythonScriptArgs = @(
+                        "--input-file", """$currentBuildInfoFilePath""" # Use the prepared file
+                        "--output-file", """$releaseNotesBodyFinalPath"""
+                        "--prev-tag", """$effectivePrevTag"""
+                        "--current-build-tag", """$releaseVersion"""
+                        "--github-owner", "ehsan18t"
+                        "--github-repo", "easy-mingw-installer"
+                    )
+                    $fullArgumentList = @($pythonScriptItself) + $pythonScriptArgs
+                    Write-LogEntry -Type "Python Call" -Message "$pythonPath $($fullArgumentList -join ' ')"
+                    
+                    $processInfo = Start-Process -FilePath $pythonPath -ArgumentList $fullArgumentList -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
+                    
+                    if ($processInfo.ExitCode -ne 0) {
+                        Write-WarningMessage -Type "Changelog Gen Failed" -Message "Python script exited with code $($processInfo.ExitCode). Check Python script output."
+                    } elseif (Test-Path $releaseNotesBodyFinalPath) {
+                        Write-SuccessMessage -Type "Changelog Generated" -Message "Release notes body created at $releaseNotesBodyFinalPath"
+                    } else {
+                        Write-WarningMessage -Type "Changelog Gen Issue" -Message "Python script ran but output file $releaseNotesBodyFinalPath not found."
+                    }
+                } else {
+                    Write-WarningMessage -Type "Changelog Skip" -Message "Input file '$currentBuildInfoFilePath' for Python script not found. Skipping changelog generation."
+                }
             } else {
-                Write-WarningMessage -Type "Changelog Gen Issue" -Message "Python script ran but output file $releaseNotesBodyFinalPath not found."
+                Write-StatusInfo -Type "Changelog Skip" -Message "Release notes body '$releaseNotesBodyFinalPath' already exists. Skipping generation."
             }
-
+            
             return Build-InnoSetupInstaller -InstallerName "EasyMinGW" `
                                      -Version $releaseVersion `
                                      -Architecture $Architecture `
@@ -555,7 +541,7 @@ Please check out https://winlibs.com/ for the latest personal build.
                                      -InnoSetupScriptPath $InnoSetupScriptPath `
                                      -GenerateLogsAlways:$GenerateLogsAlways
         } else {
-            Write-StatusInfo -Type "Build Skipped" -Message "Skipping InnoSetup build for $Architecture-bit as version matches or test mode without proceeding."
+            Write-StatusInfo -Type "Build Skipped" -Message "Skipping InnoSetup build for $Architecture-bit."
             return $true 
         }
     }
