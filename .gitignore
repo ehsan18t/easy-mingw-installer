@@ -5,3 +5,4 @@ Output/
 builds/
 mingw*/
 *.log
+release_notes_body.md

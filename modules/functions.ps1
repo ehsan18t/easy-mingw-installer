@@ -269,21 +269,25 @@ function Build-InnoSetupInstaller {
         [Parameter(Mandatory = $true)]
         [string]$OutputDirectory,
         [Parameter(Mandatory = $true)]
-        [string]$InnoSetupScriptPath, # Path to MinGW_Installer.iss
+        [string]$InnoSetupScriptPath,
+        [Parameter(Mandatory = $true)]
+        [string]$SevenZipExePath, # Added for hash generation
         [Parameter(Mandatory = $false)]
         [bool]$GenerateLogsAlways = $false
     )
     Write-ActionProgress -ActionName "Building Installer" -Details "$InstallerName $Version ($Architecture)"
     $logFileName = "build_${InstallerName}_${Architecture}.log"
-    $logFilePath = Join-Path -Path $PSScriptRoot -ChildPath "..\$logFileName" # Logs in the project root
+    $logFilePath = Join-Path -Path $PSScriptRoot -ChildPath "..\$logFileName"
 
     $arguments = "/DMyAppName=`"$InstallerName`" /DMyAppVersion=`"$Version`" /DArch=`"$Architecture`" /DSourcePath=`"$SourceContentPath`" /DOutputPath=`"$OutputDirectory`""
     
     $stdOutFile = $null
     $stdErrFile = $null
+    $installerBuiltSuccessfully = $false
+    $installerExeName = "$($InstallerName).v$($Version).$($Architecture)-bit.exe"
+    $installerExeFullPath = Join-Path -Path $OutputDirectory -ChildPath $installerExeName
 
     try {
-        # Ensure OutputDirectory exists
         if (-not (Test-Path $OutputDirectory)) {
             New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
         }
@@ -307,19 +311,44 @@ function Build-InnoSetupInstaller {
             }
             Write-ColoredHost -Text "    Build Succeeded (Log generated): $InstallerName ($Architecture)" -ForegroundColor $script:colors.Green
             Write-StatusInfo -Type "Log File" -Message $logFilePath
+            $installerBuiltSuccessfully = $true
         } else {
             Write-ColoredHost -Text "    Build Succeeded: $InstallerName ($Architecture)" -ForegroundColor $script:colors.Green
+            $installerBuiltSuccessfully = $true
         }
-        return $true
+
+        # Generate hashes if installer was built successfully
+        if ($installerBuiltSuccessfully -and (Test-Path $installerExeFullPath -PathType Leaf)) {
+            Write-StatusInfo -Type "Hash Generation" -Message "Generating hashes for $installerExeName..."
+            $hashFileName = "$($InstallerName).v$($Version).$($Architecture)-bit.hashes.txt"
+            $hashOutputFilePath = Join-Path -Path $OutputDirectory -ChildPath $hashFileName
+            $formatHashesScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "Format-7ZipHashes.ps1"
+
+            if (-not (Test-Path $formatHashesScriptPath -PathType Leaf)) {
+                Write-WarningMessage -Type "Hash Script Missing" -Message "Format-7ZipHashes.ps1 not found at '$formatHashesScriptPath'. Skipping hash generation."
+            } else {
+                try {
+                    # Call the Format-7ZipHashes.ps1 script and save output to hash file
+                    & $formatHashesScriptPath -FilePath $installerExeFullPath -SevenZipExePath $SevenZipExePath | Out-File -FilePath $hashOutputFilePath -Encoding utf8 -Force
+                    Write-StatusInfo -Type "Hash File" -Message "Hashes saved to $hashOutputFilePath"
+                } catch {
+                    Write-WarningMessage -Type "Hash Gen Error" -Message "Failed to generate or save hashes for $installerExeName : $($_.Exception.Message)"
+                }
+            }
+        } elseif ($installerBuiltSuccessfully) {
+            Write-WarningMessage -Type "Hash Skip" -Message "Installer EXE not found at '$installerExeFullPath'. Skipping hash generation."
+        }
+
+        return $installerBuiltSuccessfully
     }
     catch {
         Write-ErrorMessage -ErrorType "InnoSetup Error" -Message "Exception during Inno Setup for $Architecture : $($_.Exception.Message)" -LogFilePath $logFilePath
-        return $false # Critical failure
+        return $false
     }
     finally {
         if ($stdOutFile -and (Test-Path $stdOutFile)) { Remove-Item $stdOutFile -Force -ErrorAction SilentlyContinue }
         if ($stdErrFile -and (Test-Path $stdErrFile)) { Remove-Item $stdErrFile -Force -ErrorAction SilentlyContinue }
-        Remove-DirectoryRecursive -Path $SourceContentPath # Clean up the source files for this build
+        Remove-DirectoryRecursive -Path $SourceContentPath
     }
 }
 
@@ -539,6 +568,7 @@ Please check out https://winlibs.com/ for the latest personal build.
                                      -InnoSetupExePath $InnoSetupExePath `
                                      -OutputDirectory $FinalOutputPath `
                                      -InnoSetupScriptPath $InnoSetupScriptPath `
+                                     -SevenZipExePath $SevenZipExePath `
                                      -GenerateLogsAlways:$GenerateLogsAlways
         } else {
             Write-StatusInfo -Type "Build Skipped" -Message "Skipping InnoSetup build for $Architecture-bit."
