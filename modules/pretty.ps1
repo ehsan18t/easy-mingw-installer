@@ -144,3 +144,27 @@ function Write-SeparatorLine {
     )
     Write-ColoredHost -Text ($Character * $Length) -ForegroundColor $Color
 }
+
+function Write-UpdatingLine {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [Parameter(Mandatory = $false)]
+        [System.ConsoleColor]$ForegroundColor = $script:colors.Yellow,
+        [Parameter(Mandatory = $false)]
+        # This length is used to pad the string with spaces, ensuring that
+        # shorter subsequent messages clear out longer previous messages on the same line.
+        # Adjust if your typical progress messages are longer.
+        [int]$LineClearLength = 78 # One less than typical 80-char width to be safe
+    )
+    # Prepend carriage return, then the text padded with spaces to clear the previous line.
+    $lineContent = "`r$($Text.PadRight($LineClearLength))"
+    Write-Host -Object $lineContent -NoNewline -ForegroundColor $ForegroundColor
+}
+
+function End-UpdatingLine {
+    [CmdletBinding()]
+    param()
+    Write-Host "" # Just print a newline to move to the next line
+}

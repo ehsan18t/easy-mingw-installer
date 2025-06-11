@@ -1,197 +1,3 @@
-function Download-File {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Url,
-
-        [Parameter(Mandatory = $true)]
-        [string]$FileName
-    )
-
-    try {
-        $uri = New-Object "System.Uri" -ArgumentList $Url
-        $request = [System.Net.HttpWebRequest]::Create($uri)
-        $request.Timeout = 30000 # Increased timeout
-
-        Write-Color "    Attempting to download from: $Url" $colors.DarkGray # Uses pretty.ps1
-
-        $response = $request.GetResponse()
-        $totalLength = $response.ContentLength # Keep as raw bytes for more accurate percentage
-        $totalLengthKB = [System.Math]::Floor($totalLength / 1024)
-        $responseStream = $response.GetResponseStream()
-
-        $targetStream = New-Object -TypeName System.IO.FileStream -ArgumentList $FileName, 'Create'
-        $buffer = New-Object byte[] 10KB # 10KB buffer
-        $downloadedBytes = 0
-        $lastReportedProgressPercent = -1 # For periodic updates
-
-        while ($true) {
-            $count = $responseStream.Read($buffer, 0, $buffer.Length)
-            if ($count -eq 0) { break }
-
-            $targetStream.Write($buffer, 0, $count)
-            $downloadedBytes += $count
-
-            if ($env:GITHUB_ACTIONS -ne "true" -and $totalLength -gt 0) {
-                $currentProgressPercent = [System.Math]::Floor(($downloadedBytes / $totalLength) * 100)
-                # Report progress periodically (e.g., every 5%)
-                if ($currentProgressPercent -ne $lastReportedProgressPercent -and ($currentProgressPercent % 5 -eq 0 -or $currentProgressPercent -eq 100)) {
-                    Write-Actions "Downloading" "$([System.Math]::Floor($downloadedBytes / 1024))K / $($totalLengthKB)K ($currentProgressPercent%)" # Uses pretty.ps1
-                    $lastReportedProgressPercent = $currentProgressPercent
-                }
-            }
-        }
-        # The Write-Host "" previously here is removed; Write-Color below handles the next line.
-        Write-Color "    Download Completed!" $colors.Green # Uses pretty.ps1
-    }
-    catch {
-        Write-Error -Type "DOWNLOAD ERROR" -Message "Failed to download '$Url': $($_.Exception.Message)" # Uses pretty.ps1
-        throw "Download failed for $Url"
-    }
-    finally {
-        if ($targetStream) { $targetStream.Dispose() }
-        if ($responseStream) { $responseStream.Dispose() }
-        if ($response) { $response.Close() }
-    }
-}
-
-function Extract-7z {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$ArchivePath,
-
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationPath,
-
-        [Parameter(Mandatory = $true)]
-        [string]$SevenZipPath
-    )
-
-    if (-not (Test-Path $SevenZipPath -PathType Leaf)) {
-        Write-Error -Type "7ZIP ERROR" -Message "7-Zip executable not found at '$SevenZipPath'."
-        throw "7-Zip not found"
-    }
-
-    $arguments = "x `"$ArchivePath`" -o`"$DestinationPath`" -y"
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $SevenZipPath
-    $startInfo.Arguments = $arguments
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    # $startInfo.RedirectStandardOutput = $true # Optional: if you need to capture output
-    # $startInfo.RedirectStandardError = $true  # Optional: if you need to capture error
-
-    try {
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $startInfo
-        $process.Start() | Out-Null
-        $process.WaitForExit()
-
-        if ($process.ExitCode -eq 0) {
-            Write-Color "    Extraction Completed!" $colors.Green # Uses pretty.ps1
-        }
-        else {
-            Write-Error -Type "EXTRACTION ERROR" -Message "7-Zip extraction failed for '$ArchivePath' with exit code $($process.ExitCode)." # Uses pretty.ps1
-            throw "Extraction failed"
-        }
-    }
-    catch {
-        Write-Error -Type "PROCESS ERROR" -Message "Error during 7-Zip execution: $($_.Exception.Message)" # Uses pretty.ps1
-        throw "7-Zip process error"
-    }
-}
-
-function Remove-Folder {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$FolderPath
-    )
-
-    if (Test-Path $FolderPath) {
-        try {
-            Remove-Item -Path $FolderPath -Recurse -Force -ErrorAction Stop
-            Write-Color "     Removed '$FolderPath'!" $colors.Green # Uses pretty.ps1
-        }
-        catch {
-            Write-Warnings -Type "CLEANUP" -Message "Failed to remove folder '$FolderPath': $($_.Exception.Message)" # Uses pretty.ps1
-        }
-    }
-    else {
-        Write-Log "Cleanup" "Folder '$FolderPath' not found, no removal needed." $colors.Gray # Uses pretty.ps1
-    }
-}
-
-function Build-Installer {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
-        [Parameter(Mandatory = $true)]
-        [string]$Arch,
-        [Parameter(Mandatory = $true)]
-        [string]$SourcePath,
-        [Parameter(Mandatory = $true)]
-        [string]$InnoSetupPath,
-        [Parameter(Mandatory = $true)]
-        [string]$BaseOutputPath, # Renamed from outputPath to avoid conflict if this module is dot sourced elsewhere
-        [Parameter(Mandatory = $false)]
-        [bool]$GenerateLogsAlways = $false
-    )
-
-    $installerScript = Join-Path -Path $PSScriptRoot -ChildPath "..\MinGW_Installer.iss" # Assuming it's one level up from modules
-
-    # Ensure BaseOutputPath exists
-    if (-not (Test-Path $BaseOutputPath)) {
-        New-Item -Path $BaseOutputPath -ItemType Directory -Force | Out-Null
-    }
-
-    $arguments = "/DMyAppName=`"$Name`" /DMyAppVersion=`"$Version`" /DArch=`"$Arch`" /DSourcePath=`"$SourcePath`" /DOutputPath=`"$BaseOutputPath`""
-
-    $tempStdOutFile = [System.IO.Path]::GetTempFileName()
-    $tempStdErrFile = [System.IO.Path]::GetTempFileName()
-    $logFile = Join-Path -Path $PSScriptRoot -ChildPath "..\build${Arch}.log" # Log in the root folder
-
-    try {
-        Write-Color "    Starting Inno Setup build for $Arch..." $colors.Cyan # Uses pretty.ps1
-        $process = Start-Process -FilePath $InnoSetupPath -ArgumentList $installerScript, $arguments `
-            -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempStdOutFile `
-            -RedirectStandardError $tempStdErrFile
-
-        $exitCode = $process.ExitCode
-        $stdOutContent = Get-Content $tempStdOutFile -ErrorAction SilentlyContinue
-        $stdErrContent = Get-Content $tempStdErrFile -ErrorAction SilentlyContinue
-
-        if ($exitCode -ne 0 -or $GenerateLogsAlways) {
-            $logContent = "Standard Output:`n$stdOutContent`n`nStandard Error:`n$stdErrContent"
-            Set-Content -Path $logFile -Value $logContent -Encoding UTF8
-
-            if ($exitCode -ne 0) {
-                Write-Error -Type "BUILD ERROR" -Message "Building $Name ($Arch) Failed!" -logs $logFile -exitCode $exitCode # Uses pretty.ps1
-                throw "Inno Setup build failed"
-            } else {
-                Write-Color "    Building $Name ($Arch) Succeeded!" $colors.Green # Uses pretty.ps1
-                Write-Color " >> Check the log file for details: " $colors.Yellow -NoNewline # Uses pretty.ps1
-                Write-Color $logFile $colors.Cyan # Uses pretty.ps1
-            }
-        } else {
-            Write-Color "    Building $Name ($Arch) Succeeded!" $colors.Green # Uses pretty.ps1
-        }
-    }
-    catch {
-        Write-Error -Type "INNOSETUP ERROR" -Message "Exception during Inno Setup execution for $Arch : $($_.Exception.Message)" -logs $logFile # Uses pretty.ps1
-        throw "Inno Setup execution failed" # Re-throw to be caught by Build-Binary or Main
-    }
-    finally {
-        Remove-Item -Path $tempStdOutFile, $tempStdErrFile -ErrorAction SilentlyContinue
-        Write-Actions "Cleanup" "Removing source path: $SourcePath"
-        Remove-Folder -FolderPath $SourcePath # Use the robust Remove-Folder
-    }
-}
-
 function Invoke-GitHubApi {
     [CmdletBinding()]
     param (
@@ -293,50 +99,109 @@ function Invoke-DownloadFile {
         [Parameter(Mandatory = $true)]
         [string]$Url,
         [Parameter(Mandatory = $true)]
-        [string]$DestinationFile
+        [string]$DestinationFile,
+        [Parameter(Mandatory = $false)]
+        [int]$MaxRetries = 3,
+        [Parameter(Mandatory = $false)]
+        [int]$RetryDelaySeconds = 5,
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 60
     )
-    Write-ActionProgress -ActionName "Downloading" -Details $Url
-    try {
-        $webRequest = [System.Net.HttpWebRequest]::Create($Url)
-        $webRequest.Timeout = 60000 # 60 seconds timeout
 
-        $response = $webRequest.GetResponse()
-        $totalLength = $response.ContentLength
-        $totalLengthKB = [System.Math]::Floor($totalLength / 1024)
-        $responseStream = $response.GetResponseStream()
+    Write-ActionProgress -ActionName "Preparing Download" -Details "From: $Url"
+    # Destination message can be removed if too verbose, or kept.
+    # Write-ActionProgress -ActionName "Destination" -Details $DestinationFile 
 
-        $targetStream = New-Object -TypeName System.IO.FileStream -ArgumentList $DestinationFile, 'Create'
-        $buffer = New-Object byte[] 40KB # Increased buffer
-        $downloadedBytes = 0
-        $lastReportedProgress = -1
+    $userAgent = "Easy-MinGW-Installer-Builder-Script/1.0"
+    $isGitHubActions = $env:GITHUB_ACTIONS -eq "true"
+    $currentTry = 0
+    $downloadSuccess = $false
 
-        while ($true) {
-            $bytesRead = $responseStream.Read($buffer, 0, $buffer.Length)
-            if ($bytesRead -eq 0) { break }
+    while ($currentTry -lt $MaxRetries -and -not $downloadSuccess) {
+        $currentTry++
+        if ($currentTry -gt 1) {
+            Write-WarningMessage -Type "Download Retry" -Message "Attempt $($currentTry) of $($MaxRetries) after $($RetryDelaySeconds) seconds..."
+            Start-Sleep -Seconds $RetryDelaySeconds
+        }
 
-            $targetStream.Write($buffer, 0, $bytesRead)
-            $downloadedBytes += $bytesRead
+        # Initial download message for the current attempt (not updating)
+        if (-not $isGitHubActions) {
+            Write-LogEntry -Type "Download" -Message "Starting download attempt $currentTry for $Url..."
+        }
 
-            if ($totalLength -gt 0) {
-                $progressPercentage = [System.Math]::Floor(($downloadedBytes / $totalLength) * 100)
-                if ($progressPercentage -gt $lastReportedProgress -and ($progressPercentage % 5 -eq 0 -or $progressPercentage -eq 100)) {
-                    Write-ActionProgress -ActionName "Progress" -Details "$([System.Math]::Floor($downloadedBytes / 1024))KB / ${totalLengthKB}KB ($progressPercentage%)"
-                    $lastReportedProgress = $progressPercentage
+
+        $webRequest = $null
+        $response = $null
+        $responseStream = $null
+        $targetStream = $null
+
+        try {
+            $webRequest = [System.Net.HttpWebRequest]::Create($Url)
+            $webRequest.UserAgent = $userAgent
+            $webRequest.Timeout = $TimeoutSeconds * 1000
+
+            $response = $webRequest.GetResponse()
+            $totalLength = $response.ContentLength
+            $totalLengthKB = [System.Math]::Floor($totalLength / 1024)
+            $responseStream = $response.GetResponseStream()
+
+            $targetStream = New-Object -TypeName System.IO.FileStream -ArgumentList $DestinationFile, 'Create'
+            $buffer = New-Object byte[] 80KB
+            $downloadedBytes = 0
+            $lastReportedProgressPercentage = -1
+
+            while ($true) {
+                $bytesRead = $responseStream.Read($buffer, 0, $buffer.Length)
+                if ($bytesRead -eq 0) { break }
+
+                $targetStream.Write($buffer, 0, $bytesRead)
+                $downloadedBytes += $bytesRead
+
+                if (-not $isGitHubActions -and $totalLength -gt 0) {
+                    $currentProgressPercentage = [System.Math]::Floor(($downloadedBytes / $totalLength) * 100)
+                    if ($currentProgressPercentage -gt $lastReportedProgressPercentage) {
+                        # Construct the full progress string for the updating line
+                        $progressText = "    Progress (Attempt $currentTry): $([System.Math]::Floor($downloadedBytes / 1024))KB / ${totalLengthKB}KB ($currentProgressPercentage%)"
+                        Write-UpdatingLine -Text $progressText # Use the new function
+                        $lastReportedProgressPercentage = $currentProgressPercentage
+                    }
                 }
             }
+            
+            if (-not $isGitHubActions) {
+                End-UpdatingLine # Finalize the updating line by printing a newline
+            }
+
+            Write-ColoredHost -Text "    Download successful: $DestinationFile (Attempt $currentTry)" -ForegroundColor $script:colors.Green
+            $downloadSuccess = $true
         }
-        Write-ColoredHost -Text "    Download complete: $DestinationFile" -ForegroundColor $script:colors.Green
-        return $true
+        catch [System.Net.WebException] {
+            if (-not $isGitHubActions) { End-UpdatingLine } # Ensure newline if error occurs mid-progress
+            $ex = $_.Exception
+            $errorMessage = "WebException during download (Attempt $currentTry): $($ex.Message)"
+            if ($ex.Response) {
+                $statusCode = [int]$ex.Response.StatusCode
+                $statusDescription = $ex.Response.StatusDescription
+                $errorMessage += " | Status: $statusCode ($statusDescription)"
+            }
+            Write-ErrorMessage -ErrorType "Download Attempt Failed" -Message $errorMessage
+            if ($ex.Response) { $ex.Response.Dispose() }
+        }
+        catch {
+            if (-not $isGitHubActions) { End-UpdatingLine } # Ensure newline if error occurs mid-progress
+            Write-ErrorMessage -ErrorType "Download Attempt Failed" -Message "Generic error during download (Attempt $currentTry): $($_.Exception.Message)"
+        }
+        finally {
+            if ($targetStream) { $targetStream.Dispose() }
+            if ($responseStream) { $responseStream.Dispose() }
+            if ($response) { $response.Dispose() }
+        }
     }
-    catch {
-        Write-ErrorMessage -ErrorType "Download Failed" -Message "Error downloading '$Url': $($_.Exception.Message)"
-        return $false
+
+    if (-not $downloadSuccess) {
+        Write-ErrorMessage -ErrorType "Download Failed" -Message "Failed to download '$Url' after $MaxRetries attempts."
     }
-    finally {
-        if ($targetStream) { $targetStream.Dispose() }
-        if ($responseStream) { $responseStream.Dispose() }
-        if ($response) { $response.Close() }
-    }
+    return $downloadSuccess
 }
 
 function Start-SevenZipExtraction {
