@@ -265,6 +265,11 @@ def main():
         markdown_output.append(error_msg)
         print("Warning: Full changelog link might be incomplete.")
 
+    markdown_output.append("")
+    markdown_output.append("<br>")
+    markdown_output.append("")
+    markdown_output.append("### File Hash")
+
     try:
         with open(args.output_file, 'w', encoding='utf-8') as f:
             f.write("\n".join(markdown_output))
