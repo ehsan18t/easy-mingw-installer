@@ -15,6 +15,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # Step 1.5: Set up Python and install dependencies
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x" # Specify your Python version
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests 
+          # Add any other pip packages your Python script might need here
+
       # Step 2: Run the build script
       # This script is expected to create 'tag\<tag_name>' and 'release_notes_body.md' in the repo root
       - name: Run build script
