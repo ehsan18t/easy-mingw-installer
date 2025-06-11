@@ -66,7 +66,7 @@ function Main {
             Write-WarningMessage -Type "Tag Check" -Message "Could not retrieve latest project tag. Version check might be affected."
         }
     } elseif ($testMode) {
-        $projectLatestTag = "v2030.01.01" # Example for testing version check logic
+        $projectLatestTag = "2025.04.27" # Example for testing version check logic
         Write-StatusInfo -Type "Tag (Test Mode)" -Message $projectLatestTag
     }
 

@@ -332,7 +332,7 @@ function Process-MingwCompilation {
         [string]$AssetPattern, # Regex pattern for the asset name
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$WinLibsReleaseInfo, # Output from Find-GitHubRelease
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)] # Made false as it might not be available on first run
         [string]$ProjectLatestTag, # Latest tag of easy-mingw-installer
         [Parameter(Mandatory = $true)]
         [string]$SevenZipExePath,
@@ -364,54 +364,85 @@ function Process-MingwCompilation {
             Write-StatusInfo -Type "Asset Found" -Message $selectedAsset.name
         } else {
             Write-ErrorMessage -ErrorType "Asset Error" -Message "No asset found in release '$($WinLibsReleaseInfo.name)' matching pattern '$AssetPattern'."
-            return $false # Stop processing this architecture
+            return $false 
         }
     } else {
         Write-ErrorMessage -ErrorType "Configuration Error" -Message "WinLibs release information not provided and not in test mode."
         return $false
     }
 
-    $releaseVersion = $null
+    $releaseVersion = $null 
+    $winlibsPublishedDateForInfoFile = ""
+
     if ($IsTestMode) {
-        $releaseVersion = "2030.10.10" # Test version
+        $releaseVersion = "2030.10.10" 
+        $winlibsPublishedDateForInfoFile = (Get-Date).ToString("yyyy-MM-dd")
     } elseif ($WinLibsReleaseInfo) {
         $releaseVersion = ConvertTo-VersionStringFromDate -DateString $WinLibsReleaseInfo.published_at -FormatType Version
+        $winlibsPublishedDateForInfoFile = ($WinLibsReleaseInfo.published_at | Get-Date).ToString("yyyy-MM-dd")
     } else {
         Write-ErrorMessage -ErrorType "Version Error" -Message "Cannot determine release version."
         return $false
     }
-    Write-StatusInfo -Type "Release Version" -Message $releaseVersion
+    Write-StatusInfo -Type "New Release Tag" -Message $releaseVersion
 
     # Create tag file for GitHub Actions
     if ($env:GITHUB_ACTIONS -eq "true") {
-        $tagFilePath = Join-Path -Path $PSScriptRoot -ChildPath "..\tag" # Create tag file in project root
-        New-Item -Path $tagFilePath -Name $releaseVersion -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
-        Write-LogEntry -Type "GitHub Actions" -Message "Tag file for '$releaseVersion' created/updated."
+        # Construct the path without Resolve-Path, as the directory might not exist yet.
+        # Get-Item on $PSScriptRoot gives a DirectoryInfo object, .Parent.FullName gets the parent dir.
+        $repoRootPath = (Get-Item $PSScriptRoot).Parent.FullName
+        $tagFileDir = Join-Path $repoRootPath "tag"
+        
+        # Ensure the directory exists before creating the file in it
+        if (-not (Test-Path $tagFileDir -PathType Container)) {
+            New-Item -Path $tagFileDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+        New-Item -Path (Join-Path $tagFileDir $releaseVersion) -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-LogEntry -Type "GitHub Actions" -Message "Tag file for '$releaseVersion' created/updated in $tagFileDir."
     }
 
+    $proceedWithBuild = $true
     if ($SkipIfVersionMatchesTag -and -not $IsTestMode) {
         if (-not $ProjectLatestTag) {
             Write-WarningMessage -Type "Version Check" -Message "Project's latest tag not available. Proceeding with build."
         } elseif ($ProjectLatestTag -eq $releaseVersion) {
             Write-StatusInfo -Type "Version Check" -Message "Current release version $releaseVersion matches project tag. Skipping build for $Architecture-bit."
-            return $true # Successfully skipped
+            $proceedWithBuild = $false
         } else {
             Write-StatusInfo -Type "Version Check" -Message "New version $releaseVersion available (Project tag: $ProjectLatestTag)."
         }
     }
     
-    $archTempDir = Join-Path -Path $TempDirectory -ChildPath "mingw$Architecture" # Specific temp dir for this arch
-    $sourcePathForInstaller = Join-Path -Path $archTempDir -ChildPath "mingw$Architecture" # Expected extracted folder name
+    $archTempDir = Join-Path -Path $TempDirectory -ChildPath "mingw$Architecture" 
+    $sourcePathForInstaller = Join-Path -Path $archTempDir -ChildPath "mingw$Architecture" # Initial assumption
+    $currentBuildInfoFilePath = Join-Path -Path $archTempDir -ChildPath "current_build_info.txt" # For Python script
+    
+    # Path for the final release notes body in the repo root.
+    # Construct the path without Resolve-Path, as the file won't exist until Python creates it.
+    if (-not $repoRootPath) { # Ensure $repoRootPath is defined if not in GHA
+         $repoRootPath = (Get-Item $PSScriptRoot).Parent.FullName
+    }
+    $releaseNotesBodyFinalPath = Join-Path $repoRootPath 'release_notes_body.md'
+
 
     try {
-        if (Test-Path $archTempDir) { Remove-DirectoryRecursive -Path $archTempDir } # Clean previous run for this arch
+        if (Test-Path $archTempDir) { Remove-DirectoryRecursive -Path $archTempDir } 
         New-Item -ItemType Directory -Path $archTempDir -Force | Out-Null
 
         if ($IsTestMode) {
             Write-WarningMessage -Type "Test Mode" -Message "Skipping download and extraction for $Architecture-bit."
-            # Create dummy structure for Inno Setup test
-            New-Item -Path $sourcePathForInstaller -ItemType Directory -Force | Out-Null
-            Set-Content -Path (Join-Path $sourcePathForInstaller "version_info.txt") -Value "Test Mode - GCC for $Architecture-bit"
+            New-Item -Path $sourcePathForInstaller -ItemType Directory -Force | Out-Null # Create dummy sourcePathForInstaller
+            $dummyInfoContent = @"
+winlibs personal build version gcc-TEST.0-mingw-w64ucrt-TEST.0-r0
+This is the winlibs Intel/AMD $Architecture-bit standalone build of:
+- GCC TEST.0
+- GDB TEST.0
+Thread model: POSIX
+Runtime library: UCRT (Test Mode)
+This build was compiled with GCC TEST.0 and packaged on $winlibsPublishedDateForInfoFile.
+"@
+            Set-Content -Path $currentBuildInfoFilePath -Value $dummyInfoContent -Encoding UTF8
+            Set-Content -Path (Join-Path $sourcePathForInstaller "version_info.txt") -Value "Test Mode - GCC for $Architecture-bit" # Dummy version_info.txt
         } else {
             $downloadedFilePath = Join-Path -Path $archTempDir -ChildPath $selectedAsset.name
             if (-not (Invoke-DownloadFile -Url $selectedAsset.browser_download_url -DestinationFile $downloadedFilePath)) {
@@ -420,32 +451,118 @@ function Process-MingwCompilation {
             if (-not (Start-SevenZipExtraction -ArchivePath $downloadedFilePath -DestinationPath $archTempDir -SevenZipExePath $SevenZipExePath)) {
                 throw "Extraction failed for $($selectedAsset.name)"
             }
-            # Verify expected extraction path
-            if (-not (Test-Path $sourcePathForInstaller -PathType Container)) {
-                 # Attempt to find the actual extracted folder if default name "mingw$Architecture" is not used by winlibs
-                $extractedDirs = Get-ChildItem -Path $archTempDir -Directory | Where-Object {$_.Name -like "mingw*"}
-                if ($extractedDirs.Count -eq 1) {
-                    $sourcePathForInstaller = $extractedDirs[0].FullName
-                    Write-WarningMessage -Type "Extraction Path" -Message "Auto-detected extracted folder: $sourcePathForInstaller"
-                } else {
-                    Write-ErrorMessage -ErrorType "Extraction Error" -Message "Could not determine extracted MinGW folder in $archTempDir."
-                    throw "Extracted MinGW folder not found"
+            
+            # Auto-detect the actual extracted folder (e.g., mingw64, mingw32)
+            # $sourcePathForInstaller was an initial assumption, now we find the actual one
+            $extractedDirs = Get-ChildItem -Path $archTempDir -Directory | Where-Object {$_.Name -like "mingw*"}
+            if ($extractedDirs.Count -eq 1) {
+                $sourcePathForInstaller = $extractedDirs[0].FullName # Update to the actual extracted path
+                Write-StatusInfo -Type "Extraction Path" -Message "Actual source path for installer content: $sourcePathForInstaller"
+            } elseif ($extractedDirs.Count -gt 1) {
+                 Write-WarningMessage -Type "Extraction Ambiguity" -Message "Multiple mingw* directories found in $archTempDir. Using the first one: $($extractedDirs[0].FullName)"
+                 $sourcePathForInstaller = $extractedDirs[0].FullName
+            } else {
+                Write-ErrorMessage -ErrorType "Extraction Error" -Message "Could not determine extracted MinGW folder (e.g., mingw64) in $archTempDir."
+                throw "Extracted MinGW folder not found"
+            }
+
+            # --- Generate $currentBuildInfoFilePath from extracted content ---
+            $winlibsInfoFile = Join-Path -Path $sourcePathForInstaller -ChildPath "version_info.txt" # Or "readme.txt", etc.
+            if (Test-Path $winlibsInfoFile -PathType Leaf) {
+                Write-StatusInfo -Type "Changelog Source" -Message "Using '$winlibsInfoFile' for changelog input."
+                $fileContent = Get-Content -Path $winlibsInfoFile -Raw -Encoding UTF8
+                if ($fileContent -notmatch "packaged on") {
+                    $fileContent += "`nThis build was compiled with GCC (Version from file) and packaged on $winlibsPublishedDateForInfoFile."
                 }
+                Set-Content -Path $currentBuildInfoFilePath -Value $fileContent -Encoding UTF8
+            } else {
+                Write-WarningMessage -Type "Changelog Source" -Message "Could not find '$winlibsInfoFile'. Using placeholder for '$currentBuildInfoFilePath'."
+                # Using the detailed placeholder you provided
+                $placeholderInfoContent = @"
+winlibs personal build version gcc-15.1.0-mingw-w64ucrt-13.0.0-r2
+
+This is the winlibs Intel/AMD $Architecture-bit standalone build of:
+- GCC 15.1.0
+- GDB 16.3
+- MinGW-w64 13.0.0 (linked with ucrt)
+- GNU Binutils 2.44
+- GNU Make 4.4.1
+- PExports 0.47
+- dos2unix 7.5.2
+- Yasm 1.3.0
+- NASM 2.16.03
+- JWasm 2.12pre
+- ccache 4.11.3
+- CMake 4.0.2
+- ninja 1.12.1
+- Doxygen 1.14.0
+- pedeps 0.1.15
+- Universal Ctags 6.2.0
+- Cppcheck 2.17.0
+- Premake 5.0.0-beta6
+
+Thread model: posix
+Runtime library: UCRT (Windows 10 or higher, or when [Update for Universal C Runtime](https://support.microsoft.com/en-us/topic/update-for-universal-c-runtime-in-windows-c0514201-7fe6-95a3-b0a5-287930f3560c) is installed on older Windows versions, not supported on systems older than Windows 7 SP1 and Windows Server 2008 R2 SP1)
+
+This build was compiled with GCC 15.1.0 and packaged on $winlibsPublishedDateForInfoFile.
+
+Please check out https://winlibs.com/ for the latest personal build.
+"@
+                Set-Content -Path $currentBuildInfoFilePath -Value $placeholderInfoContent -Encoding UTF8
             }
         }
 
-        return Build-InnoSetupInstaller -InstallerName "EasyMinGW" `
-                                 -Version $releaseVersion `
-                                 -Architecture $Architecture `
-                                 -SourceContentPath $sourcePathForInstaller `
-                                 -InnoSetupExePath $InnoSetupExePath `
-                                 -OutputDirectory $FinalOutputPath `
-                                 -InnoSetupScriptPath $InnoSetupScriptPath `
-                                 -GenerateLogsAlways:$GenerateLogsAlways
+        if ($proceedWithBuild) {
+            Write-StatusInfo -Type "Changelog Generation" -Message "Attempting to generate release notes body..."
+            $pythonPath = "python.exe" 
+            # Assuming $PSScriptRoot is C:\Users\Ehsan\Documents\Github\ehsan18t\easy-mingw-installer\modules
+            $pythonScriptItself = Join-Path -Path $PSScriptRoot -ChildPath "generate_changelog.py" 
+            $effectivePrevTag = if ([string]::IsNullOrEmpty($ProjectLatestTag)) { "HEAD" } else { $ProjectLatestTag }
+
+            # Ensure arguments that might contain spaces are quoted if necessary for the command line,
+            # but PowerShell will handle passing them as distinct arguments to Start-Process.
+            $pythonScriptArgs = @(
+                "--input-file", """$currentBuildInfoFilePath"""
+                "--output-file", """$releaseNotesBodyFinalPath"""
+                "--prev-tag", """$effectivePrevTag"""
+                "--current-build-tag", """$releaseVersion"""
+                "--github-owner", "ehsan18t"
+                "--github-repo", "easy-mingw-installer"
+            )
+            
+            # Combine the script path and its arguments for Start-Process
+            $fullArgumentList = @($pythonScriptItself) + $pythonScriptArgs
+
+            Write-LogEntry -Type "Python Call" -Message "$pythonPath $($fullArgumentList -join ' ')"
+            
+            # Call Start-Process with the combined list
+            $processInfo = Start-Process -FilePath $pythonPath -ArgumentList $fullArgumentList -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
+            
+            if ($processInfo.ExitCode -ne 0) {
+                Write-WarningMessage -Type "Changelog Gen Failed" -Message "Python script exited with code $($processInfo.ExitCode). Check Python script output."
+            } elseif (Test-Path $releaseNotesBodyFinalPath) {
+                Write-SuccessMessage -Type "Changelog Generated" -Message "Release notes body created at $releaseNotesBodyFinalPath"
+            } else {
+                Write-WarningMessage -Type "Changelog Gen Issue" -Message "Python script ran but output file $releaseNotesBodyFinalPath not found."
+            }
+
+            return Build-InnoSetupInstaller -InstallerName "EasyMinGW" `
+                                     -Version $releaseVersion `
+                                     -Architecture $Architecture `
+                                     -SourceContentPath $sourcePathForInstaller `
+                                     -InnoSetupExePath $InnoSetupExePath `
+                                     -OutputDirectory $FinalOutputPath `
+                                     -InnoSetupScriptPath $InnoSetupScriptPath `
+                                     -GenerateLogsAlways:$GenerateLogsAlways
+        } else {
+            Write-StatusInfo -Type "Build Skipped" -Message "Skipping InnoSetup build for $Architecture-bit as version matches or test mode without proceeding."
+            return $true 
+        }
     }
     catch {
         Write-ErrorMessage -ErrorType "Compilation Failed" -Message "Error processing $Architecture-bit MinGW: $($_.Exception.Message)"
         return $false
     }
-    # Note: $archTempDir (e.g. Temp\EasyMinGWInstaller\mingw64) is cleaned up by Build-InnoSetupInstaller's finally block for its $SourceContentPath
 }
+
+# ... (Rest of functions.ps1)

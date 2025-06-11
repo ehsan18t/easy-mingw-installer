@@ -81,6 +81,19 @@ function Write-StatusInfo {
     Write-FormattedLine -Indicator ">>" -Type $Type -Message $Message -IndicatorColor $script:colors.Magenta -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
+function Write-SuccessMessage {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Type,
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        [System.ConsoleColor]$TypeColor = $script:colors.White, # Or $script:colors.Green
+        [System.ConsoleColor]$MessageColor = $script:colors.Green
+    )
+    Write-FormattedLine -Indicator "++" -Type $Type -Message $Message -IndicatorColor $script:colors.Green -TypeColor $TypeColor -MessageColor $MessageColor
+}
+
 function Write-WarningMessage {
     [CmdletBinding()]
     param (

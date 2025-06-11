@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write # Needed for creating tags and releases
 
 jobs:
   build-and-release:
@@ -15,65 +15,80 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # Step 2: Run the build script including auto tagging
+      # Step 2: Run the build script
+      # This script is expected to create 'tag\<tag_name>' and 'release_notes_body.md' in the repo root
       - name: Run build script
         run: |
           cmd /c run.bat
 
       # Step 3: Retrieve tag from file
       - name: Retrieve and Create tag
+        id: get_tag # Add an id to this step to reference its output if needed elsewhere
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Retrieve the tag name from the created file
-          $tag = Get-ChildItem -Path tag | Select-Object -ExpandProperty Name
+          # Retrieve the tag name from the created file (assuming it's in a 'tag' directory)
+          $tagDir = ".\tag" # Path to the directory containing the tag file
+          if (Test-Path $tagDir) {
+            $tag = Get-ChildItem -Path $tagDir | Select-Object -First 1 | Select-Object -ExpandProperty Name
+            if ($tag) {
+              echo "Found tag: $tag"
+              echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-          # Save the tag to the GitHub environment variable so that it can be accessed by subsequent steps
-          echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-          # Configure Git with the necessary information to create a tag
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Create and push the tag to GitHub
-          git tag $tag
-          git push origin $tag
-
-          # Debugging: Output the tag to verify it's correct
-          echo "Tag created: $tag"
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git tag $tag
+              git push origin $tag
+              echo "Tag created and pushed: $tag"
+            } else {
+              echo "Error: Tag file found in $tagDir but is empty or unreadable."
+              exit 1
+            }
+          } else {
+            echo "Error: Tag directory '$tagDir' not found. Build script might have failed to create it."
+            exit 1
+          }
+        shell: pwsh # Ensure PowerShell is used for this script block
 
       # Step 4: Debug builds folder
       - name: Debug builds folder
         run: |
           dir builds
+          if (Test-Path .\release_notes_body.md) {
+            echo "Release notes file found."
+            Get-Content .\release_notes_body.md | Select-Object -First 5 # Display first 5 lines
+          } else {
+            echo "WARNING: .\release_notes_body.md not found!"
+          }
 
       # Step 5: Upload binaries to GitHub Release
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          draft: true
-          files: builds/**/* # Ensure this matches the correct directory
+          # draft: true # Set to false if you want to publish immediately
+          draft: false # Or keep true if manual review is preferred before publishing
+          files: builds/**/*
           tag_name: ${{ env.tag }}
           name: Easy MinGW Installer v${{ env.tag }}
+          body_path: release_notes_body.md # Use the generated markdown file for the release body
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 7: Handle failure and upload logs
+      # Step 7: Handle failure and upload logs (no changes needed here)
       - name: Prepare logs on failure
-        if: failure() # Only runs if the workflow fails
+        if: failure()
         run: |
           $destinationDir = ".\logs"
-
           if (-not (Test-Path -Path $destinationDir)) {
               New-Item -ItemType Directory -Path $destinationDir
           }
-
           $logFiles = Get-ChildItem -Path . -Filter "*.log" -File
           foreach ($file in $logFiles) {
               Move-Item -Path $file.FullName -Destination $destinationDir
           }
+        shell: pwsh
       - name: Upload failure logs
-        if: failure() # Only runs if the workflow fails
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: logs
