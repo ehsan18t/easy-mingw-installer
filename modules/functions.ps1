@@ -293,7 +293,7 @@ function Build-InnoSetupInstaller {
     $stdOutFile = $null
     $stdErrFile = $null
     $installerBuiltSuccessfully = $false
-    $installerExeName = "$($InstallerName).v$($Version).$($Architecture)-bit.exe"
+    $installerExeName = "$($OutputName).v$($Version).$($Architecture)-bit.exe"
     $installerExeFullPath = Join-Path -Path $OutputDirectory -ChildPath $installerExeName
 
     try {
@@ -329,9 +329,11 @@ function Build-InnoSetupInstaller {
         # Generate hashes if installer was built successfully
         if ($installerBuiltSuccessfully -and (Test-Path $installerExeFullPath -PathType Leaf)) {
             Write-StatusInfo -Type "Hash Generation" -Message "Generating hashes for $installerExeName..."
-            $hashFileName = "$($InstallerName).v$($Version).$($Architecture)-bit.hashes.txt"
+            $hashFileName = "$($OutputName).v$($Version).$($Architecture)-bit.hashes.txt"
             $hashOutputFilePath = Join-Path -Path $OutputDirectory -ChildPath $hashFileName
             $formatHashesScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "Format-7ZipHashes.ps1"
+
+            Write-StatusInfo -Type "Hash Script Path" -Message "Using hash script at $formatHashesScriptPath"
 
             if (-not (Test-Path $formatHashesScriptPath -PathType Leaf)) {
                 Write-WarningMessage -Type "Hash Script Missing" -Message "Format-7ZipHashes.ps1 not found at '$formatHashesScriptPath'. Skipping hash generation."
