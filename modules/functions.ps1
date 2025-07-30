@@ -539,7 +539,7 @@ Please check out https://winlibs.com/ for the latest personal build.
             if (-not (Test-Path $releaseNotesBodyFinalPath)) {
                 if (Test-Path $currentBuildInfoFilePath) {
                     Write-StatusInfo -Type "Changelog Generation" -Message "Attempting to generate release notes body..."
-                    $pythonPath = "python.exe" 
+                    $pythonPath = "python" 
                     $pythonScriptItself = Join-Path -Path $PSScriptRoot -ChildPath "generate_changelog.py" 
                     $effectivePrevTag = if ([string]::IsNullOrEmpty($ProjectLatestTag)) { "HEAD" } else { $ProjectLatestTag }
 

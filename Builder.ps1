@@ -57,86 +57,62 @@ Write-SeparatorLine
 
 # --- Main Build Logic ---
 function Main {
-    Write-StatusInfo -Type "Main Process" -Message "Starting build operations..."
+    param(
+        # Add parameters to Main to pass in the required info
+        [Parameter(Mandatory=$true)]
+        $WinLibsReleaseInfo,
+        $ProjectLatestTag,
+        [Parameter(Mandatory=$true)]
+        [string[]]$Archs,
+        [Parameter(Mandatory=$true)]
+        [string[]]$NamePatterns,
+        [Parameter(Mandatory=$true)]
+        [string]$SevenZipPath,
+        [Parameter(Mandatory=$true)]
+        [string]$InnoSetupPath,
+        [Parameter(Mandatory=$true)]
+        [string]$FinalOutputPath,
+        [Parameter(Mandatory=$true)]
+        [string]$BaseTempDir,
+        [Parameter(Mandatory=$true)]
+        [string]$InnoSetupScriptPath,
+        [Parameter(Mandatory=$true)]
+        [switch]$SkipIfVersionMatchesTag,
+        [Parameter(Mandatory=$true)]
+        [switch]$GenerateLogsAlways,
+        [Parameter(Mandatory=$true)]
+        [switch]$IsTestMode
+    )
 
-    $projectLatestTag = $null
-    if ($checkNewRelease -and -not $testMode) {
-        $projectLatestTag = Get-LatestGitHubTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
-        if (-not $projectLatestTag) {
-            Write-WarningMessage -Type "Tag Check" -Message "Could not retrieve latest project tag. Version check might be affected."
-        }
-    } elseif ($testMode) {
-        $projectLatestTag = "2024.10.05" # Example for testing version check logic
-        Write-StatusInfo -Type "Tag (Test Mode)" -Message $projectLatestTag
-    }
-
-    $winLibsReleaseInfo = $null
-    if (-not $testMode) {
-        $winLibsReleaseInfo = Find-GitHubRelease -Owner "brechtsanders" -Repo "winlibs_mingw" -TitlePattern $titlePattern
-        if (-not $winLibsReleaseInfo) {
-            Write-ErrorMessage -ErrorType "CRITICAL" -Message "No matching WinLibs release found for pattern: $titlePattern. Cannot proceed."
-            Exit 1 # Critical failure, cannot build anything
-        }
-    } else {
-        Write-StatusInfo -Type "Release (Test Mode)" -Message "Skipping actual WinLibs release fetching."
-        # Create a dummy $winLibsReleaseInfo for test mode structure if needed by Process-MingwCompilation
-        $winLibsReleaseInfo = [PSCustomObject]@{ name = "Test Release"; published_at = (Get-Date).ToString("o"); assets = @() }
-    }
-
-    # Determine the version that will be used for all builds
-    $globalReleaseVersion = $null
-    if ($testMode) {
-        $globalReleaseVersion = "2030.10.10"
-    } elseif ($winLibsReleaseInfo) {
-        $globalReleaseVersion = ConvertTo-VersionStringFromDate -DateString $winLibsReleaseInfo.published_at -FormatType Version
-    }
-    
-    if (-not $globalReleaseVersion) {
-        Write-ErrorMessage -ErrorType "CRITICAL" -Message "Could not determine the global release version. Cannot proceed."
-        Exit 1
-    }
-    
-    Write-StatusInfo -Type "Global Release Version" -Message "This build run targets version: $globalReleaseVersion"
-
-    if ($archs.Length -ne $namePatterns.Length) {
+    if ($Archs.Length -ne $NamePatterns.Length) {
         Write-ErrorMessage -ErrorType "CRITICAL CONFIG" -Message "Mismatch between the number of architectures and name patterns."
-        Exit 1
+        # Returning false will cause the script to exit with an error code
+        return $false
     }
 
     $overallSuccess = $true
-    for ($i = 0; $i -lt $archs.Length; $i++) {
-        $currentArch = $archs[$i]
-        $currentPattern = $namePatterns[$i]
+    for ($i = 0; $i -lt $Archs.Length; $i++) {
+        $currentArch = $Archs[$i]
+        $currentPattern = $NamePatterns[$i]
         
         Write-StatusInfo -Type "Initiating Build" -Message "Architecture: $currentArch-bit, Pattern: $currentPattern"
         
         $buildSuccess = Process-MingwCompilation -Architecture $currentArch `
             -AssetPattern $currentPattern `
-            -WinLibsReleaseInfo $winLibsReleaseInfo `
-            -ProjectLatestTag $projectLatestTag `
-            -SevenZipExePath $7ZipPath `
+            -WinLibsReleaseInfo $WinLibsReleaseInfo `
+            -ProjectLatestTag $ProjectLatestTag `
+            -SevenZipExePath $SevenZipPath `
             -InnoSetupExePath $InnoSetupPath `
-            -FinalOutputPath $outputPath `
-            -TempDirectory $baseTempDir `
-            -InnoSetupScriptPath $innoSetupScript `
-            -SkipIfVersionMatchesTag:$checkNewRelease `
-            -GenerateLogsAlways:$generateLogsAlways `
-            -IsTestMode:$testMode
+            -FinalOutputPath $FinalOutputPath `
+            -TempDirectory $BaseTempDir `
+            -InnoSetupScriptPath $InnoSetupScriptPath `
+            -SkipIfVersionMatchesTag:$SkipIfVersionMatchesTag `
+            -GenerateLogsAlways:$GenerateLogsAlways `
+            -IsTestMode:$IsTestMode
         
         if (-not $buildSuccess) {
             Write-ErrorMessage -ErrorType "Architecture Build Failed" -Message "Failed to process $currentArch-bit architecture."
             $overallSuccess = $false
-        }
-    }
-
-    # Append hashes to changelog after all builds are complete
-    if ($overallSuccess) {
-        $releaseNotesBodyPath = Join-Path -Path $PSScriptRoot -ChildPath 'release_notes_body.md'
-        if (Test-Path $releaseNotesBodyPath -PathType Leaf) {
-            Write-SeparatorLine
-            Append-HashesToChangelog -ChangelogPath $releaseNotesBodyPath -OutputPath $outputPath -Version $globalReleaseVersion -Archs $archs
-        } else {
-            Write-WarningMessage -Type "Hash Append" -Message "Cannot append hashes: changelog file '$releaseNotesBodyPath' not found."
         }
     }
 
@@ -201,7 +177,77 @@ function Append-HashesToChangelog {
 # --- Script Execution & Cleanup ---
 $scriptSuccess = $false
 try {
-    $scriptSuccess = Main
+    # This logic is moved from Main to the main script body
+    Write-StatusInfo -Type "Main Process" -Message "Starting build operations..."
+
+    $projectLatestTag = $null
+    if ($checkNewRelease -and -not $testMode) {
+        $projectLatestTag = Get-LatestGitHubTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
+        if (-not $projectLatestTag) {
+            Write-WarningMessage -Type "Tag Check" -Message "Could not retrieve latest project tag. Version check might be affected."
+        }
+    } elseif ($testMode) {
+        $projectLatestTag = "2024.10.05" # Example for testing version check logic
+        Write-StatusInfo -Type "Tag (Test Mode)" -Message $projectLatestTag
+    }
+
+    $winLibsReleaseInfo = $null
+    if (-not $testMode) {
+        $winLibsReleaseInfo = Find-GitHubRelease -Owner "brechtsanders" -Repo "winlibs_mingw" -TitlePattern $titlePattern
+        if (-not $winLibsReleaseInfo) {
+            Write-ErrorMessage -ErrorType "CRITICAL" -Message "No matching WinLibs release found for pattern: $titlePattern. Cannot proceed."
+            throw "No WinLibs release found." # Throw to trigger catch block
+        }
+    } else {
+        Write-StatusInfo -Type "Release (Test Mode)" -Message "Skipping actual WinLibs release fetching."
+        $winLibsReleaseInfo = [PSCustomObject]@{ name = "Test Release"; published_at = (Get-Date).ToString("o"); assets = @() }
+    }
+
+    $globalReleaseVersion = $null
+    if ($testMode) {
+        $globalReleaseVersion = "2030.10.10"
+    } elseif ($winLibsReleaseInfo) {
+        $globalReleaseVersion = ConvertTo-VersionStringFromDate -DateString $winLibsReleaseInfo.published_at -FormatType Version
+    }
+    
+    if (-not $globalReleaseVersion) {
+        Write-ErrorMessage -ErrorType "CRITICAL" -Message "Could not determine the global release version. Cannot proceed."
+        throw "Could not determine global release version."
+    }
+    
+    Write-StatusInfo -Type "Global Release Version" -Message "This build run targets version: $globalReleaseVersion"
+
+    if ($checkNewRelease -and -not $testMode -and $projectLatestTag -eq $globalReleaseVersion) {
+        Write-SeparatorLine
+        Write-SuccessMessage -Type "Version Check" -Message "Project tag '$projectLatestTag' matches the latest release version. No new build is required."
+        # Set success to true and the script will exit gracefully in the finally block
+        $scriptSuccess = $true 
+    } else {
+        # Call Main with all necessary parameters
+        $scriptSuccess = Main -WinLibsReleaseInfo $winLibsReleaseInfo `
+                              -ProjectLatestTag $projectLatestTag `
+                              -Archs $archs `
+                              -NamePatterns $namePatterns `
+                              -SevenZipPath $7ZipPath `
+                              -InnoSetupPath $InnoSetupPath `
+                              -FinalOutputPath $outputPath `
+                              -BaseTempDir $baseTempDir `
+                              -InnoSetupScriptPath $innoSetupScript `
+                              -SkipIfVersionMatchesTag:$checkNewRelease `
+                              -GenerateLogsAlways:$generateLogsAlways `
+                              -IsTestMode:$testMode
+
+        # Append hashes to changelog after all builds are complete
+        if ($scriptSuccess) {
+            $releaseNotesBodyPath = Join-Path -Path $PSScriptRoot -ChildPath 'release_notes_body.md'
+            if (Test-Path $releaseNotesBodyPath -PathType Leaf) {
+                Write-SeparatorLine
+                Append-HashesToChangelog -ChangelogPath $releaseNotesBodyPath -OutputPath $outputPath -Version $globalReleaseVersion -Archs $archs
+            } else {
+                Write-WarningMessage -Type "Hash Append" -Message "Cannot append hashes: changelog file '$releaseNotesBodyPath' not found."
+            }
+        }
+    }
 }
 catch {
     Write-ErrorMessage -ErrorType "FATAL SCRIPT ERROR" -Message "An unhandled error occurred: $($_.Exception.ToString())"
