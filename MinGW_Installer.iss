@@ -7,6 +7,10 @@
   #define MyAppName "Easy MinGW Installer"
 #endif
 
+#ifndef MyOutputName
+  #define MyOutputName MyAppName
+#endif
+
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.1"
 #endif
@@ -32,7 +36,7 @@ AppUpdatesURL={#MyAppURL}
 CreateAppDir=no
 PrivilegesRequired=admin
 OutputDir={#OutputPath}
-OutputBaseFilename="{#MyAppName}.v{#MyAppVersion}.{#Arch}-bit"
+OutputBaseFilename="{#MyOutputName}.v{#MyAppVersion}.{#Arch}-bit"
 Compression=lzma2/ultra64  
 SolidCompression=yes
 WizardStyle=modern

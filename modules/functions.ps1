@@ -258,6 +258,8 @@ function Build-InnoSetupInstaller {
     param (
         [Parameter(Mandatory = $true)]
         [string]$InstallerName,
+        [Parameter(Mandatory = $false)]
+        [string]$OutputName,
         [Parameter(Mandatory = $true)]
         [string]$Version,
         [Parameter(Mandatory = $true)]
@@ -275,11 +277,18 @@ function Build-InnoSetupInstaller {
         [Parameter(Mandatory = $false)]
         [bool]$GenerateLogsAlways = $false
     )
+
+    # If OutputName is not provided, use InstallerName
+    if ([string]::IsNullOrEmpty($OutputName)) {
+        $OutputName = $InstallerName
+    }
+
     Write-ActionProgress -ActionName "Building Installer" -Details "$InstallerName $Version ($Architecture)"
     $logFileName = "build_${InstallerName}_${Architecture}.log"
     $logFilePath = Join-Path -Path $PSScriptRoot -ChildPath "..\$logFileName"
 
-    $arguments = "/DMyAppName=`"$InstallerName`" /DMyAppVersion=`"$Version`" /DArch=`"$Architecture`" /DSourcePath=`"$SourceContentPath`" /DOutputPath=`"$OutputDirectory`""
+    # Update the Build-InnoSetupInstaller function call in functions.ps1
+    $arguments = "/DMyAppName=`"$InstallerName`" /DMyOutputName=`"$OutputName`" /DMyAppVersion=`"$Version`" /DArch=`"$Architecture`" /DSourcePath=`"$SourceContentPath`" /DOutputPath=`"$OutputDirectory`""
     
     $stdOutFile = $null
     $stdErrFile = $null
@@ -561,7 +570,8 @@ Please check out https://winlibs.com/ for the latest personal build.
                 Write-StatusInfo -Type "Changelog Skip" -Message "Release notes body '$releaseNotesBodyFinalPath' already exists. Skipping generation."
             }
             
-            return Build-InnoSetupInstaller -InstallerName "EasyMinGW" `
+            return Build-InnoSetupInstaller -InstallerName "EasyMinGW Installer" `
+                                     -OutputName "EasyMinGW.Installer" `
                                      -Version $releaseVersion `
                                      -Architecture $Architecture `
                                      -SourceContentPath $sourcePathForInstaller `

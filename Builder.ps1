@@ -170,7 +170,7 @@ function Append-HashesToChangelog {
     $codeBlockEnd = '```'
     
     foreach ($arch in $Archs) {
-        $hashFileName = "EasyMinGW.v$($Version).$($arch)-bit.hashes.txt"
+        $hashFileName = "EasyMinGW.Installer.v$($Version).$($arch)-bit.hashes.txt"
         $hashFilePath = Join-Path -Path $OutputPath -ChildPath $hashFileName
         $archHeaderMarkdown = "**$($arch)-bit**"
         
