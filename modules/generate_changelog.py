@@ -169,7 +169,7 @@ def main():
                 if thread_model_value.lower() == "posix":
                     thread_model_value = "POSIX"
                 markdown_output.append(
-                    f"<strong>Thread model:</strong>{thread_model_value}")
+                    f"<strong>Thread model:</strong> {thread_model_value}")
                 markdown_output.append("")
                 markdown_output.append("<br>")
                 markdown_output.append("")
