@@ -13,7 +13,7 @@ jobs:
     steps:
       # Step 1: Check out the repository
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Step 1.5: Set up Python and install dependencies
       - name: Set up Python
