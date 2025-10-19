@@ -40,7 +40,7 @@ $baseTempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "Eas
 if (Test-Path $baseTempDir) {
     Remove-DirectoryRecursive -Path $baseTempDir
 }
-New-Item -ItemType Directory -Path $baseTempDir -Force | Out-Null
+Ensure-Directory -Path $baseTempDir
 
 $innoSetupScript = Join-Path -Path $PSScriptRoot -ChildPath "MinGW_Installer.iss"
 if (-not (Test-Path $innoSetupScript -PathType Leaf)) {
@@ -61,6 +61,10 @@ function Main {
         # Add parameters to Main to pass in the required info
         [Parameter(Mandatory=$true)]
         $WinLibsReleaseInfo,
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$ReleaseMetadata,
+        [Parameter(Mandatory=$true)]
+        [string]$ReleaseNotesPath,
         $ProjectLatestTag,
         [Parameter(Mandatory=$true)]
         [string[]]$Archs,
@@ -100,6 +104,8 @@ function Main {
         $buildSuccess = Process-MingwCompilation -Architecture $currentArch `
             -AssetPattern $currentPattern `
             -WinLibsReleaseInfo $WinLibsReleaseInfo `
+            -ReleaseMetadata $ReleaseMetadata `
+            -ReleaseNotesPath $ReleaseNotesPath `
             -ProjectLatestTag $ProjectLatestTag `
             -SevenZipExePath $SevenZipPath `
             -InnoSetupExePath $InnoSetupPath `
@@ -203,21 +209,21 @@ try {
         $winLibsReleaseInfo = [PSCustomObject]@{ name = "Test Release"; published_at = (Get-Date).ToString("o"); assets = @() }
     }
 
-    $globalReleaseVersion = $null
-    if ($testMode) {
-        $globalReleaseVersion = "2030.10.10"
-    } elseif ($winLibsReleaseInfo) {
-        $globalReleaseVersion = ConvertTo-VersionStringFromDate -DateString $winLibsReleaseInfo.published_at -FormatType Version
-    }
-    
-    if (-not $globalReleaseVersion) {
+    $releaseMetadata = Get-ReleaseMetadata -ReleaseInfo $winLibsReleaseInfo -IsTestMode:$testMode
+    $targetVersion = $releaseMetadata.Version
+    if (-not $targetVersion) {
         Write-ErrorMessage -ErrorType "CRITICAL" -Message "Could not determine the global release version. Cannot proceed."
         throw "Could not determine global release version."
     }
-    
-    Write-StatusInfo -Type "Global Release Version" -Message "This build run targets version: $globalReleaseVersion"
 
-    if ($checkNewRelease -and -not $testMode -and $projectLatestTag -eq $globalReleaseVersion) {
+    Write-StatusInfo -Type "Global Release Version" -Message "This build run targets version: $targetVersion"
+    if (-not $testMode) {
+        Write-StatusInfo -Type "Release Date" -Message $releaseMetadata.PublishedDateDisplay
+    }
+
+    $releaseNotesBodyPath = Join-Path -Path $PSScriptRoot -ChildPath 'release_notes_body.md'
+
+    if ($checkNewRelease -and -not $testMode -and $projectLatestTag -eq $targetVersion) {
         Write-SeparatorLine
         Write-SuccessMessage -Type "Version Check" -Message "Project tag '$projectLatestTag' matches the latest release version. No new build is required."
         # Set success to true and the script will exit gracefully in the finally block
@@ -225,6 +231,8 @@ try {
     } else {
         # Call Main with all necessary parameters
         $scriptSuccess = Main -WinLibsReleaseInfo $winLibsReleaseInfo `
+                              -ReleaseMetadata $releaseMetadata `
+                              -ReleaseNotesPath $releaseNotesBodyPath `
                               -ProjectLatestTag $projectLatestTag `
                               -Archs $archs `
                               -NamePatterns $namePatterns `
@@ -239,10 +247,9 @@ try {
 
         # Append hashes to changelog after all builds are complete
         if ($scriptSuccess) {
-            $releaseNotesBodyPath = Join-Path -Path $PSScriptRoot -ChildPath 'release_notes_body.md'
             if (Test-Path $releaseNotesBodyPath -PathType Leaf) {
                 Write-SeparatorLine
-                Append-HashesToChangelog -ChangelogPath $releaseNotesBodyPath -OutputPath $outputPath -Version $globalReleaseVersion -Archs $archs
+                Append-HashesToChangelog -ChangelogPath $releaseNotesBodyPath -OutputPath $outputPath -Version $targetVersion -Archs $archs
             } else {
                 Write-WarningMessage -Type "Hash Append" -Message "Cannot append hashes: changelog file '$releaseNotesBodyPath' not found."
             }

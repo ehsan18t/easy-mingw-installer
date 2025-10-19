@@ -1,3 +1,6 @@
+$script:GitHubApiCache = @{}
+$script:ReleaseNotesGenerated = $false
+
 function Invoke-GitHubApi {
     [CmdletBinding()]
     param (
@@ -7,9 +10,18 @@ function Invoke-GitHubApi {
         [hashtable]$Headers = @{ "Accept" = "application/vnd.github.v3+json" },
         [int]$TimeoutSec = 30
     )
+    if (-not $Headers.ContainsKey('User-Agent')) {
+        $Headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+    }
+    if ($Method -eq 'GET' -and $script:GitHubApiCache.ContainsKey($Uri)) {
+        return $script:GitHubApiCache[$Uri]
+    }
     try {
         Write-LogEntry -Type "GitHub API" -Message "Requesting $Uri"
         $response = Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+        if ($Method -eq 'GET') {
+            $script:GitHubApiCache[$Uri] = $response
+        }
         return $response
     }
     catch {
@@ -53,13 +65,10 @@ function Find-GitHubRelease {
     $selectedRelease = $null
 
     if ($releasesInfo) {
-        foreach ($release in $releasesInfo) {
-            if ($release.name -like $TitlePattern -and -not $release.prerelease) {
-                if (-not $selectedRelease -or ([datetime]$release.published_at) -gt ([datetime]$selectedRelease.published_at)) {
-                    $selectedRelease = $release
-                }
-            }
-        }
+        $selectedRelease = $releasesInfo |
+            Where-Object { $_.name -like $TitlePattern -and -not $_.prerelease } |
+            Sort-Object { Get-Date $_.published_at } -Descending |
+            Select-Object -First 1
     }
 
     if ($selectedRelease) {
@@ -109,8 +118,8 @@ function Invoke-DownloadFile {
     )
 
     Write-ActionProgress -ActionName "Preparing Download" -Details "From: $Url"
-    # Destination message can be removed if too verbose, or kept.
-    # Write-ActionProgress -ActionName "Destination" -Details $DestinationFile 
+    $destinationDirectory = Split-Path -Path $DestinationFile -Parent
+    if ($destinationDirectory) { Ensure-Directory -Path $destinationDirectory }
 
     $userAgent = "Easy-MinGW-Installer-Builder-Script/1.0"
     $isGitHubActions = $env:GITHUB_ACTIONS -eq "true"
@@ -145,7 +154,7 @@ function Invoke-DownloadFile {
             $totalLengthKB = [System.Math]::Floor($totalLength / 1024)
             $responseStream = $response.GetResponseStream()
 
-            $targetStream = New-Object -TypeName System.IO.FileStream -ArgumentList $DestinationFile, 'Create'
+            $targetStream = [System.IO.File]::Create($DestinationFile)
             $buffer = New-Object byte[] 80KB
             $downloadedBytes = 0
             $lastReportedProgressPercentage = -1
@@ -250,6 +259,17 @@ function Remove-DirectoryRecursive {
         catch {
             Write-WarningMessage -Type "Cleanup Warning" -Message "Failed to remove folder '$Path': $($_.Exception.Message)"
         }
+    }
+}
+
+function Ensure-Directory {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Path) -and -not (Test-Path $Path -PathType Container)) {
+        New-Item -Path $Path -ItemType Directory -Force | Out-Null
     }
 }
 
@@ -372,6 +392,10 @@ function Process-MingwCompilation {
         [string]$AssetPattern, # Regex pattern for the asset name
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$WinLibsReleaseInfo, # Output from Find-GitHubRelease
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$ReleaseMetadata,
+        [Parameter(Mandatory = $true)]
+        [string]$ReleaseNotesPath,
         [Parameter(Mandatory = $false)] # Made false as it might not be available on first run
         [string]$ProjectLatestTag, # Latest tag of easy-mingw-installer
         [Parameter(Mandatory = $true)]
@@ -404,19 +428,8 @@ function Process-MingwCompilation {
         else { Write-ErrorMessage -ErrorType "Asset Error" -Message "No asset found in release '$($WinLibsReleaseInfo.name)' matching pattern '$AssetPattern'."; return $false }
     } else { Write-ErrorMessage -ErrorType "Configuration Error" -Message "WinLibs release information not provided and not in test mode."; return $false }
 
-    $releaseVersion = $null 
-    $winlibsPublishedDateForInfoFile = ""
-
-    if ($IsTestMode) {
-        $releaseVersion = "2030.10.10" 
-        $winlibsPublishedDateForInfoFile = (Get-Date).ToString("yyyy-MM-dd")
-    } elseif ($WinLibsReleaseInfo) {
-        $releaseVersion = ConvertTo-VersionStringFromDate -DateString $WinLibsReleaseInfo.published_at -FormatType Version
-        $winlibsPublishedDateForInfoFile = ($WinLibsReleaseInfo.published_at | Get-Date).ToString("yyyy-MM-dd")
-    } else {
-        Write-ErrorMessage -ErrorType "Version Error" -Message "Cannot determine release version."
-        return $false
-    }
+    $releaseVersion = $ReleaseMetadata.Version
+    $winlibsPublishedDateForInfoFile = $ReleaseMetadata.PublishedDateForInfo
     Write-StatusInfo -Type "New Release Tag" -Message $releaseVersion
 
     # Create tag file for GitHub Actions - this will run per arch if build proceeds
@@ -446,21 +459,15 @@ function Process-MingwCompilation {
     $archTempDir = Join-Path -Path $TempDirectory -ChildPath "mingw$Architecture" 
     $sourcePathForInstaller = Join-Path -Path $archTempDir -ChildPath "mingw$Architecture" # Initial assumption
     $currentBuildInfoFilePath = Join-Path -Path $archTempDir -ChildPath "current_build_info.txt" # This is the input for Python
-    
-    # Path for the final release notes body in the repo root.
-    # Construct the path without Resolve-Path, as the file won't exist until Python creates it.
-    if (-not $repoRootPath) { # Ensure $repoRootPath is defined if not in GHA
-         $repoRootPath = (Get-Item $PSScriptRoot).Parent.FullName
-    }
-    $releaseNotesBodyFinalPath = Join-Path $repoRootPath 'release_notes_body.md' # Output of Python
+    $releaseNotesBodyFinalPath = $ReleaseNotesPath
 
     try {
         if (Test-Path $archTempDir) { Remove-DirectoryRecursive -Path $archTempDir } 
-        New-Item -ItemType Directory -Path $archTempDir -Force | Out-Null
+        Ensure-Directory -Path $archTempDir
 
         if ($IsTestMode) {
             Write-WarningMessage -Type "Test Mode" -Message "Skipping download and extraction for $Architecture-bit."
-            New-Item -Path $sourcePathForInstaller -ItemType Directory -Force | Out-Null # Create dummy sourcePathForInstaller
+            Ensure-Directory -Path $sourcePathForInstaller # Create dummy sourcePathForInstaller
             $dummyInfoContent = @"
 winlibs personal build version gcc-TEST.0-mingw-w64ucrt-TEST.0-r0
 This is the winlibs Intel/AMD $Architecture-bit standalone build of:
@@ -538,7 +545,7 @@ Please check out https://winlibs.com/ for the latest personal build.
 
         if ($proceedWithBuild) {
             # Conditional Changelog Generation
-            if (-not (Test-Path $releaseNotesBodyFinalPath)) {
+            if (-not $script:ReleaseNotesGenerated -and -not (Test-Path $releaseNotesBodyFinalPath)) {
                 if (Test-Path $currentBuildInfoFilePath) {
                     Write-StatusInfo -Type "Changelog Generation" -Message "Attempting to generate release notes body..."
                     $pythonPath = "python" 
@@ -562,6 +569,7 @@ Please check out https://winlibs.com/ for the latest personal build.
                         Write-WarningMessage -Type "Changelog Gen Failed" -Message "Python script exited with code $($processInfo.ExitCode). Check Python script output."
                     } elseif (Test-Path $releaseNotesBodyFinalPath) {
                         Write-SuccessMessage -Type "Changelog Generated" -Message "Release notes body created at $releaseNotesBodyFinalPath"
+                        $script:ReleaseNotesGenerated = $true
                     } else {
                         Write-WarningMessage -Type "Changelog Gen Issue" -Message "Python script ran but output file $releaseNotesBodyFinalPath not found."
                     }
@@ -590,5 +598,40 @@ Please check out https://winlibs.com/ for the latest personal build.
     catch {
         Write-ErrorMessage -ErrorType "Compilation Failed" -Message "Error processing $Architecture-bit MinGW: $($_.Exception.Message)"
         return $false
+    }
+}
+
+function Get-ReleaseMetadata {
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param (
+        [Parameter(Mandatory = $false)]
+        [PSCustomObject]$ReleaseInfo,
+        [Parameter(Mandatory = $false)]
+        [switch]$IsTestMode
+    )
+
+    if ($IsTestMode) {
+        $now = Get-Date
+        return [PSCustomObject]@{
+            Release              = $ReleaseInfo
+            Version              = "2030.10.10"
+            PublishedDate        = $now
+            PublishedDateDisplay = $now.ToString("dd-MMM-yyyy HH:mm:ss")
+            PublishedDateForInfo = $now.ToString("yyyy-MM-dd")
+        }
+    }
+
+    if (-not $ReleaseInfo) {
+        throw "Release information is required when not in test mode."
+    }
+
+    $published = Get-Date -Date $ReleaseInfo.published_at
+    return [PSCustomObject]@{
+        Release              = $ReleaseInfo
+        Version              = ConvertTo-VersionStringFromDate -DateString $ReleaseInfo.published_at -FormatType Version
+        PublishedDate        = $published
+        PublishedDateDisplay = ConvertTo-VersionStringFromDate -DateString $ReleaseInfo.published_at -FormatType Display
+        PublishedDateForInfo = $published.ToString("yyyy-MM-dd")
     }
 }
