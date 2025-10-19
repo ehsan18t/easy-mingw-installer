@@ -7,7 +7,7 @@
   <!-- Release Version -->
     <img src="https://img.shields.io/github/tag/ehsan18t/easy-mingw-installer?color=blue&label=Release&style=for-the-badge" alt="Release Version" />
   <!-- Download counts -->
-    <img src="https://img.shields.io/github/downloads/ehsan18t/easy-mingw-installer/total?color=green&style=for-the-badge" alt="Download Count" />
+    <img src="https://downloads-counter-github-release.ahsan-khan.workers.dev/badge?owner=ehsan18t&repo=easy-mingw-installer&label=DOWNLOADS" alt="Download Count" />
 </div>
 <br>
 
@@ -53,7 +53,7 @@
 
 <br>
 
-<a href="https://github.com/ehsan18t/easy-mingw-installer/releases"><img alt="GitHub release (latest by date including pre-releases)" src="https://img.shields.io/github/downloads-pre/ehsan18t/easy-mingw-installer/latest/total?color=red&label=Download%20latest&style=for-the-badge"></a>
+<a href="https://github.com/ehsan18t/easy-mingw-installer/releases"><img alt="GitHub release (latest by date including pre-releases)" src="https://downloads-counter-github-release.ahsan-khan.workers.dev/badge?owner=ehsan18t&repo=easy-mingw-installer&metric=latest&label=DOWNLOAD%20%20LATEST&color=red"></a>
 
 <br>
 
