@@ -38,8 +38,12 @@
     - CMake
     - ninja
     - Doxygen
+    - pedeps
     - Universal Ctags
     - Cppcheck
+    - Premake
+    - ntldd
+    - pkgconf
 
   - **Thread Model:** POSIX
   - **Runtime Library:** UCRT
