@@ -6,3 +6,7 @@ builds/
 mingw*/
 *.log
 release_notes_body.md
+
+# Python cache
+__pycache__/
+*.pyc
