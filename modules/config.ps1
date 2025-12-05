@@ -2,95 +2,39 @@
 # Easy MinGW Installer - Configuration Module
 # ============================================================================
 # Centralized configuration with environment variable overrides.
-# All hardcoded values should be defined here.
+# All configurable values should be defined here for easy maintenance.
 # ============================================================================
 
-# Script-scoped configuration object
+# Script-scoped configuration object (cached after first initialization)
 $script:Config = $null
 
-function Get-BuildConfig {
-    <#
-    .SYNOPSIS
-        Returns the centralized build configuration object.
-    .DESCRIPTION
-        Creates and caches a configuration object with all build settings.
-        Values can be overridden via environment variables.
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param()
+# ============================================================================
+# Logging Levels
+# ============================================================================
+# Controls the verbosity of output throughout the build process.
+# Can be overridden via EMI_LOG_LEVEL environment variable.
+#
+# Values: 'Verbose', 'Normal', 'Quiet'
+#   Verbose - Show all messages including debug info
+#   Normal  - Show standard progress and status messages (default)
+#   Quiet   - Show only errors and final status
+# ============================================================================
 
-    if ($null -ne $script:Config) {
-        return $script:Config
-    }
-
-    $script:Config = [PSCustomObject]@{
-        # Repository Information
-        ProjectOwner      = Get-EnvOrDefault 'EMI_PROJECT_OWNER' 'ehsan18t'
-        ProjectRepo       = Get-EnvOrDefault 'EMI_PROJECT_REPO' 'easy-mingw-installer'
-        WinLibsOwner      = Get-EnvOrDefault 'EMI_WINLIBS_OWNER' 'brechtsanders'
-        WinLibsRepo       = Get-EnvOrDefault 'EMI_WINLIBS_REPO' 'winlibs_mingw'
-
-        # Build Metadata
-        InstallerName     = 'EasyMinGW Installer'
-        InstallerBaseName = 'EasyMinGW.Installer'
-        
-        # Version used in test mode
-        TestModeVersion   = '2099.01.01'
-        TestModeTag       = '2024.10.05'
-
-        # Tool Paths (auto-detected if not specified)
-        SevenZipPath      = $null  # Set during initialization
-        InnoSetupPath     = $null  # Set during initialization
-
-        # Default Tool Search Locations
-        ToolSearchPaths   = @(
-            $env:ProgramFiles
-            ${env:ProgramFiles(x86)}
-            'C:\Program Files'
-            'C:\Program Files (x86)'
-        ) | Where-Object { $_ }
-
-        # Directories
-        TempDirName       = 'EasyMinGWInstaller_Build'
-        TempDirectory     = Join-Path ([System.IO.Path]::GetTempPath()) 'EasyMinGWInstaller_Build'
-
-        # GitHub API
-        GitHubApiBase     = 'https://api.github.com'
-        GitHubUserAgent   = 'easy-mingw-installer-builder'
-        ApiTimeoutSeconds = 30
-        ApiMaxRetries     = 3
-        ApiRetryDelay     = 5
-
-        # Download Settings
-        DownloadTimeout   = 300  # 5 minutes
-        DownloadRetries   = 3
-        DownloadRetryDelay = 10
-        DownloadBufferSize = 81920  # 80KB
-
-        # Runtime State (set during build)
-        IsGitHubActions   = $env:GITHUB_ACTIONS -eq 'true'
-        IsTestMode        = $false
-        SkipDownload      = $false
-        SkipBuild         = $false
-        SkipChangelog     = $false
-        OfflineMode       = $false
-    }
-
-    return $script:Config
-}
+$script:ValidLogLevels = @('Verbose', 'Normal', 'Quiet')
 
 function Get-EnvOrDefault {
     <#
     .SYNOPSIS
         Returns environment variable value or default.
+    .PARAMETER Name
+        Environment variable name.
+    .PARAMETER Default
+        Default value if not set.
     #>
-    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [string]$Name,
-        [Parameter(Mandatory)]
-        [string]$Default
+        [string]$Default = ''
     )
 
     $value = [Environment]::GetEnvironmentVariable($Name)
@@ -103,38 +47,31 @@ function Get-EnvOrDefault {
 function Find-Tool {
     <#
     .SYNOPSIS
-        Searches for a tool executable in common locations.
-    .DESCRIPTION
-        Searches Program Files directories for a tool, returning the first match.
+        Searches for a tool in Program Files directories.
+    .PARAMETER SubPath
+        Relative path under Program Files (e.g., '7-Zip\7z.exe').
+    .RETURNS
+        Full path if found, $null otherwise.
     #>
-    [CmdletBinding()]
-    [OutputType([string])]
     param(
         [Parameter(Mandatory)]
-        [string]$ToolName,
-        
-        [Parameter(Mandatory)]
-        [string]$SubPath,
-        
-        [Parameter()]
-        [string]$ExeName
+        [string]$SubPath
     )
 
-    $config = Get-BuildConfig
-    
-    foreach ($basePath in $config.ToolSearchPaths) {
-        if (-not $basePath) { continue }
-        
+    $searchPaths = @(
+        $env:ProgramFiles
+        ${env:ProgramFiles(x86)}
+        'C:\Program Files'
+        'C:\Program Files (x86)'
+    ) | Where-Object { $_ } | Select-Object -Unique
+
+    foreach ($basePath in $searchPaths) {
         $fullPath = Join-Path $basePath $SubPath
-        if ($ExeName) {
-            $fullPath = Join-Path $fullPath $ExeName
-        }
-        
         if (Test-Path $fullPath -PathType Leaf) {
             return $fullPath
         }
     }
-    
+
     return $null
 }
 
@@ -142,174 +79,246 @@ function Find-SevenZip {
     <#
     .SYNOPSIS
         Locates 7-Zip executable.
+    .DESCRIPTION
+        Checks environment variable first, then searches Program Files.
     #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param()
-
-    # Check environment variable first
-    $envPath = $env:EMI_7ZIP_PATH
-    if ($envPath -and (Test-Path $envPath -PathType Leaf)) {
+    
+    # Check environment variable
+    $envPath = Get-EnvOrDefault 'EMI_7ZIP_PATH'
+    if ($envPath -and (Test-Path $envPath)) {
         return $envPath
     }
 
-    return Find-Tool -ToolName '7-Zip' -SubPath '7-Zip' -ExeName '7z.exe'
+    # Search common locations
+    return Find-Tool '7-Zip\7z.exe'
 }
 
 function Find-InnoSetup {
     <#
     .SYNOPSIS
-        Locates Inno Setup compiler executable.
+        Locates Inno Setup compiler (ISCC.exe).
+    .DESCRIPTION
+        Checks environment variable first, then searches for v6 and v5.
     #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param()
-
-    # Check environment variable first
-    $envPath = $env:EMI_INNOSETUP_PATH
-    if ($envPath -and (Test-Path $envPath -PathType Leaf)) {
+    
+    # Check environment variable
+    $envPath = Get-EnvOrDefault 'EMI_INNOSETUP_PATH'
+    if ($envPath -and (Test-Path $envPath)) {
         return $envPath
     }
 
     # Try Inno Setup 6 first, then 5
-    $path = Find-Tool -ToolName 'Inno Setup' -SubPath 'Inno Setup 6' -ExeName 'ISCC.exe'
+    $path = Find-Tool 'Inno Setup 6\ISCC.exe'
     if ($path) { return $path }
     
-    return Find-Tool -ToolName 'Inno Setup' -SubPath 'Inno Setup 5' -ExeName 'ISCC.exe'
+    return Find-Tool 'Inno Setup 5\ISCC.exe'
+}
+
+function Get-BuildConfig {
+    <#
+    .SYNOPSIS
+        Returns the centralized build configuration object.
+    .DESCRIPTION
+        Creates and caches a configuration object with all build settings.
+        Values can be overridden via environment variables prefixed with EMI_.
+    .OUTPUTS
+        PSCustomObject with all configuration properties.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param()
+
+    if ($null -ne $script:Config) {
+        return $script:Config
+    }
+
+    # Determine log level from environment
+    $logLevel = Get-EnvOrDefault 'EMI_LOG_LEVEL' 'Normal'
+    if ($logLevel -notin $script:ValidLogLevels) {
+        $logLevel = 'Normal'
+    }
+
+    $script:Config = [PSCustomObject]@{
+        # ========================
+        # Repository Settings
+        # ========================
+        # Can be overridden via EMI_PROJECT_OWNER, EMI_PROJECT_REPO
+        ProjectOwner      = Get-EnvOrDefault 'EMI_PROJECT_OWNER' 'ehsan18t'
+        ProjectRepo       = Get-EnvOrDefault 'EMI_PROJECT_REPO' 'easy-mingw-installer'
+        WinLibsOwner      = Get-EnvOrDefault 'EMI_WINLIBS_OWNER' 'brechtsanders'
+        WinLibsRepo       = Get-EnvOrDefault 'EMI_WINLIBS_REPO' 'winlibs_mingw'
+
+        # ========================
+        # Build Naming
+        # ========================
+        InstallerName     = 'EasyMinGW Installer'
+        InstallerBaseName = 'EasyMinGW.Installer'
+
+        # ========================
+        # Test Mode Settings
+        # ========================
+        TestModeVersion   = '2099.01.01'
+
+        # ========================
+        # Tool Paths
+        # ========================
+        # Auto-detected during initialization, can be overridden
+        SevenZipPath      = $null
+        InnoSetupPath     = $null
+
+        # ========================
+        # Directories
+        # ========================
+        TempDirectory     = Join-Path ([System.IO.Path]::GetTempPath()) 'EasyMinGW_Build'
+
+        # ========================
+        # API Settings
+        # ========================
+        GitHubApiBase     = 'https://api.github.com'
+        GitHubUserAgent   = 'easy-mingw-installer-builder'
+        ApiTimeoutSeconds = 30
+        ApiMaxRetries     = 3
+        ApiRetryDelaySeconds = 5
+
+        # ========================
+        # Download Settings
+        # ========================
+        DownloadRetries   = 3
+        DownloadRetryDelaySeconds = 10
+
+        # ========================
+        # Logging
+        # ========================
+        # Values: 'Verbose', 'Normal', 'Quiet'
+        LogLevel          = $logLevel
+
+        # ========================
+        # Runtime State
+        # ========================
+        # These are set during initialization based on parameters/environment
+        IsGitHubActions   = $env:GITHUB_ACTIONS -eq 'true'
+        IsTestMode        = $false
+        SkipDownload      = $false
+        SkipBuild         = $false
+        SkipChangelog     = $false
+        GenerateLogsAlways = $false
+    }
+
+    return $script:Config
 }
 
 function Initialize-BuildConfig {
     <#
     .SYNOPSIS
-        Initializes build configuration with tool paths and mode settings.
+        Initializes the build configuration with runtime overrides.
     .DESCRIPTION
-        Sets up the configuration object with discovered tool paths and
-        applies mode-specific settings. Should be called once at script start.
+        Should be called once at script startup to configure tool paths
+        and runtime flags based on parameters and environment.
     .PARAMETER Overrides
-        A hashtable of configuration overrides to apply. Supports:
-        - SevenZipPath, InnoSetupPath: Tool paths
-        - IsTestMode, SkipDownload, SkipBuild, SkipChangelog, OfflineMode: Flags
+        Hashtable of property overrides (e.g., @{ IsTestMode = $true }).
     #>
     [CmdletBinding()]
     param(
+        [Parameter()]
         [hashtable]$Overrides = @{}
     )
 
-    $config = Get-BuildConfig
+    $cfg = Get-BuildConfig
 
-    # Extract override values
-    $sevenZipPath = $Overrides['SevenZipPath']
-    $innoSetupPath = $Overrides['InnoSetupPath']
-    $testMode = $Overrides['IsTestMode'] -eq $true
-    $skipDownload = $Overrides['SkipDownload'] -eq $true
-    $skipBuild = $Overrides['SkipBuild'] -eq $true
-    $skipChangelog = $Overrides['SkipChangelog'] -eq $true
-    $offlineMode = $Overrides['OfflineMode'] -eq $true
-
-    # Set tool paths (use provided or auto-detect)
-    $config.SevenZipPath = if ($sevenZipPath) { $sevenZipPath } else { Find-SevenZip }
-    $config.InnoSetupPath = if ($innoSetupPath) { $innoSetupPath } else { Find-InnoSetup }
-
-    # Apply mode settings
-    $config.IsTestMode = $testMode
-    $config.SkipDownload = $skipDownload -or $testMode
-    $config.SkipBuild = $skipBuild
-    $config.SkipChangelog = $skipChangelog
-    $config.OfflineMode = $offlineMode -or $testMode
-
-    # In offline mode, skip changelog since it needs GitHub API
-    if ($config.OfflineMode) {
-        $config.SkipChangelog = $true
+    # ========================
+    # Tool Detection
+    # ========================
+    # Priority: Parameter override > Environment variable > Auto-detect
+    
+    if ($Overrides.ContainsKey('SevenZipPath') -and $Overrides.SevenZipPath) {
+        $cfg.SevenZipPath = $Overrides.SevenZipPath
+    }
+    else {
+        $cfg.SevenZipPath = Find-SevenZip
     }
 
-    return $config
+    if ($Overrides.ContainsKey('InnoSetupPath') -and $Overrides.InnoSetupPath) {
+        $cfg.InnoSetupPath = $Overrides.InnoSetupPath
+    }
+    else {
+        $cfg.InnoSetupPath = Find-InnoSetup
+    }
+
+    # ========================
+    # Mode Flags
+    # ========================
+    if ($Overrides.ContainsKey('IsTestMode')) {
+        $cfg.IsTestMode = [bool]$Overrides.IsTestMode
+    }
+
+    # Test mode implies certain skip flags
+    if ($cfg.IsTestMode) {
+        $cfg.SkipDownload = $true
+        $cfg.SkipChangelog = $true
+    }
+
+    # Allow explicit overrides of skip flags
+    if ($Overrides.ContainsKey('SkipDownload')) {
+        $cfg.SkipDownload = [bool]$Overrides.SkipDownload
+    }
+    if ($Overrides.ContainsKey('SkipBuild')) {
+        $cfg.SkipBuild = [bool]$Overrides.SkipBuild
+    }
+    if ($Overrides.ContainsKey('SkipChangelog')) {
+        $cfg.SkipChangelog = [bool]$Overrides.SkipChangelog
+    }
+    if ($Overrides.ContainsKey('GenerateLogsAlways')) {
+        $cfg.GenerateLogsAlways = [bool]$Overrides.GenerateLogsAlways
+    }
+
+    # Log level override
+    if ($Overrides.ContainsKey('LogLevel') -and $Overrides.LogLevel -in $script:ValidLogLevels) {
+        $cfg.LogLevel = $Overrides.LogLevel
+    }
 }
 
 function Test-BuildDependencies {
     <#
     .SYNOPSIS
-        Validates that all required build dependencies are available.
-    .DESCRIPTION
-        Checks for 7-Zip, Inno Setup, and optionally Python.
-        Returns a result object with validation status and messages.
+        Validates that required build tools are available.
+    .OUTPUTS
+        Hashtable with Success (bool) and Errors (string[]).
     #>
     [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param(
-        [switch]$RequirePython
-    )
+    [OutputType([hashtable])]
+    param()
 
-    $config = Get-BuildConfig
+    $cfg = Get-BuildConfig
     $errors = @()
-    $warnings = @()
 
-    # Check 7-Zip
-    if (-not $config.SevenZipPath) {
-        $errors += '7-Zip not found. Install from https://www.7-zip.org/ or set EMI_7ZIP_PATH environment variable.'
+    # 7-Zip is always required
+    if (-not $cfg.SevenZipPath) {
+        $errors += '7-Zip not found. Install from https://7-zip.org or set EMI_7ZIP_PATH'
     }
-    elseif (-not (Test-Path $config.SevenZipPath -PathType Leaf)) {
-        $errors += "7-Zip path invalid: $($config.SevenZipPath)"
-    }
-
-    # Check Inno Setup (only required if not skipping build)
-    if (-not $config.SkipBuild) {
-        if (-not $config.InnoSetupPath) {
-            $errors += 'Inno Setup not found. Install from https://jrsoftware.org/isinfo.php or set EMI_INNOSETUP_PATH environment variable.'
-        }
-        elseif (-not (Test-Path $config.InnoSetupPath -PathType Leaf)) {
-            $errors += "Inno Setup path invalid: $($config.InnoSetupPath)"
-        }
+    elseif (-not (Test-Path $cfg.SevenZipPath -PathType Leaf)) {
+        $errors += "7-Zip path invalid: $($cfg.SevenZipPath)"
     }
 
-    # Check Python (for changelog generation)
-    if ($RequirePython -and -not $config.SkipChangelog) {
-        try {
-            $pythonVersion = & python --version 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                $warnings += 'Python not found. Changelog generation will use fallback template.'
-            }
+    # Inno Setup required unless skipping build
+    if (-not $cfg.SkipBuild) {
+        if (-not $cfg.InnoSetupPath) {
+            $errors += 'Inno Setup not found. Install from https://jrsoftware.org or set EMI_INNOSETUP_PATH'
         }
-        catch {
-            $warnings += 'Python not available. Changelog generation will use fallback template.'
+        elseif (-not (Test-Path $cfg.InnoSetupPath -PathType Leaf)) {
+            $errors += "Inno Setup path invalid: $($cfg.InnoSetupPath)"
         }
     }
 
-    return [PSCustomObject]@{
-        Success  = $errors.Count -eq 0
-        IsValid  = $errors.Count -eq 0
-        Errors   = $errors
-        Warnings = $warnings
+    return @{
+        Success = ($errors.Count -eq 0)
+        Errors  = $errors
     }
 }
 
 function Reset-BuildConfig {
     <#
     .SYNOPSIS
-        Resets the configuration cache.
-    .DESCRIPTION
-        Clears the cached configuration object, forcing re-initialization on next access.
+        Resets the configuration cache (useful for testing).
     #>
-    [CmdletBinding()]
-    param()
-
     $script:Config = $null
-}
-
-# Export module state for testing
-function Get-ConfigDebugInfo {
-    <#
-    .SYNOPSIS
-        Returns configuration state for debugging.
-    #>
-    [CmdletBinding()]
-    param()
-
-    $config = Get-BuildConfig
-    return [PSCustomObject]@{
-        Config           = $config
-        SevenZipExists   = if ($config.SevenZipPath) { Test-Path $config.SevenZipPath } else { $false }
-        InnoSetupExists  = if ($config.InnoSetupPath) { Test-Path $config.InnoSetupPath } else { $false }
-        IsGitHubActions  = $config.IsGitHubActions
-        WorkingDirectory = Get-Location
-    }
 }
