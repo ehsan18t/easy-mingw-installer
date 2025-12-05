@@ -1,0 +1,131 @@
+name: CI - Test Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - revamp-scripts
+    paths-ignore:
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  test-build:
+    runs-on: windows-2022
+    name: Test Build (GCC 15)
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Run test build
+        shell: pwsh
+        run: |
+          # Define build parameters
+          $params = @{
+            TitlePattern      = '*CC 15*POSIX*MinGW*UCRT*'
+            Archs             = @('64', '32')
+            NamePatterns      = @(
+              'winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$',
+              'winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$'
+            )
+            OutputPath        = './builds'
+            TestMode          = $true
+            ValidateAssets    = $true
+            GenerateChangelog = $true
+            CleanFirst        = $true
+            GenerateLogsAlways = $true
+          }
+
+          # Run the build script
+          .\Builder.ps1 @params
+
+      - name: List build outputs
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Build Directory ===" -ForegroundColor Cyan
+          if (Test-Path ./builds) {
+            Get-ChildItem -Path ./builds -Recurse | Format-Table Name, Length, LastWriteTime
+          } else {
+            Write-Host "No builds directory found"
+          }
+
+          Write-Host "`n=== Log Files ===" -ForegroundColor Cyan
+          $logs = Get-ChildItem -Path . -Filter "*.log" -File -ErrorAction SilentlyContinue
+          if ($logs) {
+            $logs | Format-Table Name, Length, LastWriteTime
+          } else {
+            Write-Host "No log files found"
+          }
+
+          Write-Host "`n=== Changelog ===" -ForegroundColor Cyan
+          if (Test-Path ./release_notes_body.md) {
+            Write-Host "Found release_notes_body.md"
+            Get-Content ./release_notes_body.md | Select-Object -First 20
+          } else {
+            Write-Host "No changelog file found"
+          }
+
+      - name: Prepare artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          # Create logs directory and move log files
+          $logsDir = "./logs"
+          if (-not (Test-Path $logsDir)) {
+            New-Item -ItemType Directory -Path $logsDir | Out-Null
+          }
+
+          $logFiles = Get-ChildItem -Path . -Filter "*.log" -File -ErrorAction SilentlyContinue
+          foreach ($file in $logFiles) {
+            Move-Item -Path $file.FullName -Destination $logsDir -Force
+          }
+
+          # Ensure builds directory exists for upload
+          if (-not (Test-Path ./builds)) {
+            New-Item -ItemType Directory -Path ./builds | Out-Null
+            "No builds were created" | Out-File -FilePath ./builds/NO_BUILDS.txt
+          }
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: builds/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload changelog
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: release_notes_body.md
+          retention-days: 7
+          if-no-files-found: ignore
