@@ -1,7 +1,31 @@
 import argparse
 import re
+import sys
 import requests  # type: ignore
 from typing import List, Dict, Optional, Any
+
+# --- Formatted Output ---
+
+
+def log_info(log_type: str, message: str) -> None:
+    """Print formatted info message matching PowerShell output style."""
+    print(f" >> {log_type}: {message}", file=sys.stderr)
+
+
+def log_success(log_type: str, message: str) -> None:
+    """Print formatted success message matching PowerShell output style."""
+    print(f" ++ {log_type}: {message}", file=sys.stderr)
+
+
+def log_warning(log_type: str, message: str) -> None:
+    """Print formatted warning message matching PowerShell output style."""
+    print(f" !! {log_type}: {message}", file=sys.stderr)
+
+
+def log_error(log_type: str, message: str) -> None:
+    """Print formatted error message matching PowerShell output style."""
+    print(f" ** {log_type}: {message}", file=sys.stderr)
+
 
 # --- GitHub API Interaction ---
 
@@ -16,27 +40,26 @@ def invoke_github_api(uri: str) -> Optional[Any]:
         response.raise_for_status()  # Raises an exception for HTTP errors
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Warning: Failed to invoke GitHub API: {e} for URI: {uri}")
+        log_warning("GitHub API", f"Request failed: {e}")
         return None
 
 
 def get_github_release_body_lines(owner: str, repo: str, tag: str) -> List[str]:
     """Fetches the body of a GitHub release and returns it as a list of lines."""
-    print(
-        f"Fetching release information for tag '{tag}' from '{owner}/{repo}'...")
+    log_info("Fetching", f"Release '{tag}' from {owner}/{repo}")
     release_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
     release_info = invoke_github_api(release_url)
 
     if not release_info:
-        print(f"Warning: Could not fetch release info for tag '{tag}'.")
+        log_warning("Release", f"Could not fetch info for tag '{tag}'")
         return []
 
     body = release_info.get("body")
     if not body:
-        print(f"Warning: Release body for tag '{tag}' is empty or not found.")
+        log_warning("Release", f"Body for tag '{tag}' is empty")
         return []
 
-    print(f"Successfully fetched release body for tag '{tag}'.")
+    log_success("Fetched", f"Release '{tag}' ({len(body.splitlines())} lines)")
     return body.splitlines()
 
 # --- Package Parsing Logic ---
@@ -97,96 +120,164 @@ def get_packages_from_markdown_lines(markdown_lines: List[str]) -> Dict[str, Dic
                 if re.match(r"^\s*##", line):
                     break
     if not package_lines_for_parsing and in_package_info_section:
-        print("Warning: Found 'Package Info' section in previous release but no package list items were extracted.")
+        log_warning(
+            "Packages", "Found 'Package Info' section but no items extracted")
     return get_packages_dict(package_lines_for_parsing)
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Generate changelog Markdown from package info.")
-    parser.add_argument("--input-file", required=True,
-                        help="Path to the text file with CURRENT build's package info.")
+    parser.add_argument("--input-file",
+                        help="Path to the text file with CURRENT build's package info. Required unless --current-tag is provided.")
     parser.add_argument("--output-file", required=True,
                         help="Path to write the generated Markdown output.")
-    parser.add_argument("--prev-tag", required=True,
-                        help="Previous GitHub release tag of this project (e.g., '2025.04.27').")
+    parser.add_argument("--prev-tag",
+                        help="Previous GitHub release tag of this project (e.g., '2025.04.27'). Optional - if not provided, no package comparison will be made.")
     parser.add_argument("--current-build-tag", required=True,
                         help="Tag for the new release being built (e.g., '2025.06.09').")
+    parser.add_argument("--current-tag",
+                        help="If provided, fetch CURRENT package info from this GitHub release tag instead of reading from --input-file. Useful for comparing two existing releases.")
     parser.add_argument("--github-owner", default="ehsan18t",
                         help="GitHub repository owner.")
     parser.add_argument(
         "--github-repo", default="easy-mingw-installer", help="GitHub repository name.")
     args = parser.parse_args()
 
+    # Validate: either --input-file or --current-tag must be provided
+    if not args.input_file and not args.current_tag:
+        parser.error("Either --input-file or --current-tag must be provided.")
+    if args.input_file and args.current_tag:
+        print("Note: Both --input-file and --current-tag provided. Using --current-tag (fetching from GitHub).")
+
     markdown_output: List[str] = []
 
-    # --- Stage 1 & 2: Parse current input file ---
+    # --- Stage 1 & 2: Parse current package info (from GitHub or local file) ---
     current_package_lines_for_info_section: List[str] = []
 
-    try:
-        with open(args.input_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        print(f"Error: Input file not found: {args.input_file}")
-        return
+    if args.current_tag:
+        # Fetch current package info from GitHub release
+        log_info(
+            "Mode", f"Fetching current package info from GitHub tag '{args.current_tag}'")
+        current_release_body_lines = get_github_release_body_lines(
+            args.github_owner, args.github_repo, args.current_tag)
 
-    in_package_list_section = False
+        if not current_release_body_lines:
+            log_error(
+                "Release", f"Could not fetch body for current tag '{args.current_tag}'")
+            sys.exit(1)
 
-    for line_content in lines:  # Simplified loop
-        line_strip = line_content.strip()
+        # Parse the release body to build markdown output and extract package lines
+        in_package_info = False
+        in_package_list = False
+        for line in current_release_body_lines:
+            line_strip = line.strip()
 
-        if not in_package_list_section and "This is the winlibs Intel/AMD" in line_content and "build of:" in line_content:
-            markdown_output.append("## Package Info")
-            markdown_output.append(
-                "This is the winlibs Intel/AMD 64-bit & 32-bit standalone build of:")
-            in_package_list_section = True
-            continue
+            # Look for Package Info section header
+            if re.match(r"^##\s*Package Info", line, re.IGNORECASE):
+                markdown_output.append("## Package Info")
+                in_package_info = True
+                continue
 
-        if in_package_list_section:
-            if line_strip.startswith("- "):
-                current_package_lines_for_info_section.append(line_strip)
-                markdown_output.append(line_strip)
-            elif not line_strip:  # Allow empty lines
-                # Or append if you want to preserve them: markdown_output.append("")
-                pass
-            # Check if it's the start of the next known sections
-            elif line_strip.startswith("Thread model:") or \
-                    line_strip.startswith("Runtime library:") or \
-                    ("This build was compiled with GCC" in line_content and "and packaged on" in line_content):
-                in_package_list_section = False  # End of package list
-                markdown_output.append("")  # Add a blank line after the list
-                # Fall through to process this line
-            # If previous was a list item and this is not, end list
-            elif markdown_output and markdown_output[-1].startswith("- "):
-                in_package_list_section = False
-                markdown_output.append("")
-
-        # --- Stage 3: Extract Thread Model, Runtime Library, Build Date ---
-        # This part now processes the line if in_package_list_section became false OR was already false
-        if not in_package_list_section:  # Process only if not in the middle of the package list items
-            if line_strip.startswith("Thread model:"):
-                thread_model_value = line_strip.split(":", 1)[1].strip()
-                if thread_model_value.lower() == "posix":
-                    thread_model_value = "POSIX"
+            # Look for the winlibs description line
+            if in_package_info and "This is the winlibs Intel/AMD" in line and "build of:" in line:
                 markdown_output.append(
-                    f"<strong>Thread model:</strong> {thread_model_value}")
-                markdown_output.append("")
-                markdown_output.append("<br>")
-                markdown_output.append("")
-            elif line_strip.startswith("Runtime library:"):
-                runtime_library_value = line_strip.split(":", 1)[1].strip()
+                    "This is the winlibs Intel/AMD 64-bit & 32-bit standalone build of:")
+                in_package_list = True
+                continue
+
+            if in_package_list:
+                if line_strip.startswith("- "):
+                    current_package_lines_for_info_section.append(line_strip)
+                    markdown_output.append(line_strip)
+                elif re.match(r"^\s*##", line):  # Next section
+                    in_package_list = False
+                    in_package_info = False
+                    markdown_output.append("")
+                elif not line_strip and current_package_lines_for_info_section:
+                    # Empty line after packages - end of list
+                    pass
+
+            # Extract thread model, runtime, build date from current release
+            if not in_package_list and in_package_info:
+                if "<strong>Thread model:</strong>" in line:
+                    markdown_output.append(line_strip)
+                    markdown_output.append("")
+                    markdown_output.append("<br>")
+                    markdown_output.append("")
+                elif "<strong>Runtime library:</strong>" in line:
+                    markdown_output.append(line_strip)
+                    markdown_output.append("")
+                elif line_strip.startswith(">") and "compiled with GCC" in line:
+                    markdown_output.append(line_strip)
+                    markdown_output.append("")
+
+        if not current_package_lines_for_info_section:
+            log_warning(
+                "Packages", f"No package list found in release '{args.current_tag}'")
+        else:
+            log_info(
+                "Packages", f"Found {len(current_package_lines_for_info_section)} in current release")
+
+    else:
+        # Read from local input file
+        try:
+            with open(args.input_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            log_error("Input File", f"Not found: {args.input_file}")
+            sys.exit(1)
+
+        in_package_list_section = False
+
+        for line_content in lines:
+            line_strip = line_content.strip()
+
+            if not in_package_list_section and "This is the winlibs Intel/AMD" in line_content and "build of:" in line_content:
+                markdown_output.append("## Package Info")
                 markdown_output.append(
-                    f"<strong>Runtime library:</strong> {runtime_library_value}<br>")
-                markdown_output.append("")
-            elif "This build was compiled with GCC" in line_content and "and packaged on" in line_content:
-                full_build_line_text = line_strip.replace(
-                    ".", "", 1) if line_strip.endswith(".") else line_strip
-                markdown_output.append(f"> {full_build_line_text}")
-                markdown_output.append("")
+                    "This is the winlibs Intel/AMD 64-bit & 32-bit standalone build of:")
+                in_package_list_section = True
+                continue
+
+            if in_package_list_section:
+                if line_strip.startswith("- "):
+                    current_package_lines_for_info_section.append(line_strip)
+                    markdown_output.append(line_strip)
+                elif not line_strip:
+                    pass
+                elif line_strip.startswith("Thread model:") or \
+                        line_strip.startswith("Runtime library:") or \
+                        ("This build was compiled with GCC" in line_content and "and packaged on" in line_content):
+                    in_package_list_section = False
+                    markdown_output.append("")
+                elif markdown_output and markdown_output[-1].startswith("- "):
+                    in_package_list_section = False
+                    markdown_output.append("")
+
+            if not in_package_list_section:
+                if line_strip.startswith("Thread model:"):
+                    thread_model_value = line_strip.split(":", 1)[1].strip()
+                    if thread_model_value.lower() == "posix":
+                        thread_model_value = "POSIX"
+                    markdown_output.append(
+                        f"<strong>Thread model:</strong> {thread_model_value}")
+                    markdown_output.append("")
+                    markdown_output.append("<br>")
+                    markdown_output.append("")
+                elif line_strip.startswith("Runtime library:"):
+                    runtime_library_value = line_strip.split(":", 1)[1].strip()
+                    markdown_output.append(
+                        f"<strong>Runtime library:</strong> {runtime_library_value}<br>")
+                    markdown_output.append("")
+                elif "This build was compiled with GCC" in line_content and "and packaged on" in line_content:
+                    full_build_line_text = line_strip.replace(
+                        ".", "", 1) if line_strip.endswith(".") else line_strip
+                    markdown_output.append(f"> {full_build_line_text}")
+                    markdown_output.append("")
 
     if not current_package_lines_for_info_section and "## Package Info" in markdown_output:
-        print("Warning: Could not find or parse the package list from the input file.")
-        # Ensure a blank line if header was added
+        log_warning("Packages", "Could not parse package list from input file")
         if markdown_output and markdown_output[-1] != "":
             markdown_output.append("")
 
@@ -198,11 +289,17 @@ def main():
     # --- Stage 5: Package Changelogs ---
     markdown_output.append("## Package Changelogs")
 
-    previous_release_body_lines = get_github_release_body_lines(
-        args.github_owner, args.github_repo, args.prev_tag)
+    previous_packages_dict: Dict[str, Dict[str, Any]] = {}
+    previous_release_body_lines: List[str] = []
 
-    previous_packages_dict = get_packages_from_markdown_lines(
-        previous_release_body_lines)
+    if args.prev_tag:
+        previous_release_body_lines = get_github_release_body_lines(
+            args.github_owner, args.github_repo, args.prev_tag)
+        previous_packages_dict = get_packages_from_markdown_lines(
+            previous_release_body_lines)
+    else:
+        log_info("Changelog", "No previous tag provided - skipping comparison")
+
     current_packages_dict = get_packages_dict(
         current_package_lines_for_info_section)
 
@@ -235,15 +332,18 @@ def main():
     if all_changes:
         markdown_output.extend(all_changes)
     else:
-        if previous_release_body_lines and previous_packages_dict:
+        if not args.prev_tag:
+            markdown_output.append(
+                "* No previous version to compare against.")
+        elif previous_release_body_lines and previous_packages_dict:
             markdown_output.append(
                 f"* No package changes detected compared to the previous version (`{args.prev_tag}`).")
         elif previous_release_body_lines and not previous_packages_dict:
             markdown_output.append(
-                f"* Previous release body for tag `'{args.prev_tag}`' was found but no package list could be parsed from it. All current packages listed as new if any.")
+                f"* Previous release body for tag `'{args.prev_tag}'` was found but no package list could be parsed.")
         else:
             markdown_output.append(
-                "* Could not retrieve or parse previous version's package list; all current packages are listed as new if any.")
+                "* Could not retrieve previous version's package list.")
         if not current_packages_dict and not all_changes:
             markdown_output.append("* No current packages found to list.")
     markdown_output.append("")
@@ -263,7 +363,7 @@ def main():
             error_msg += " - Current build tag missing"
         error_msg += "]"
         markdown_output.append(error_msg)
-        print("Warning: Full changelog link might be incomplete.")
+        log_warning("Changelog", "Full changelog link is incomplete")
 
     markdown_output.append("")
     markdown_output.append("<br>")
@@ -273,9 +373,10 @@ def main():
     try:
         with open(args.output_file, 'w', encoding='utf-8') as f:
             f.write("\n".join(markdown_output))
-        print(f"Markdown file generated successfully: {args.output_file}")
+        # Success message is printed by PowerShell caller
     except IOError as e:
-        print(f"Error writing output file: {e}")
+        log_error("Write Failed", str(e))
+        sys.exit(1)
 
 
 if __name__ == "__main__":
