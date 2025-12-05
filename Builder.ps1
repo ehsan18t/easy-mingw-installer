@@ -1,274 +1,449 @@
+# ============================================================================
+# Easy MinGW Installer - Main Build Script
+# ============================================================================
+# Entry point for building Easy MinGW Installer packages.
+# Supports normal mode and test mode with granular control flags.
+#
+# Usage:
+#   .\Builder.ps1 -TestMode                    # Test build
+#   .\Builder.ps1 -Archs "64","32"             # Build both architectures
+#   .\Builder.ps1 -CheckNewRelease             # Skip if already at latest
+#
+# Environment Variables:
+#   EMI_LOG_LEVEL    - Logging verbosity: Verbose, Normal, Quiet
+#   EMI_7ZIP_PATH    - Custom 7-Zip path
+#   EMI_INNOSETUP_PATH - Custom Inno Setup path
+# ============================================================================
+
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$titlePattern,
-    [Parameter(Mandatory = $true)]
-    [string[]]$archs,
-    [Parameter(Mandatory = $true)]
-    [string[]]$namePatterns,
-    [Parameter(Mandatory = $true)]
-    [string]$outputPath,
-    [Parameter(Mandatory = $true)]
-    [string]$7ZipPath,
-    [Parameter(Mandatory = $true)]
+    # WinLibs release title pattern (e.g., "*UCRT*POSIX*")
+    [Parameter()]
+    [string]$TitlePattern = '*UCRT*POSIX*',
+
+    # Architectures to build (e.g., @('64', '32'))
+    [Parameter()]
+    [string[]]$Archs = @('64'),
+
+    # Asset name patterns for each architecture (regex)
+    [Parameter()]
+    [string[]]$NamePatterns = @('.*ucrt-runtime.*posix.*without-llvm.*\.7z$'),
+
+    # Output directory for built installers
+    [Parameter()]
+    [string]$OutputPath,
+
+    # Path to 7-Zip executable (auto-detected if not specified)
+    [Parameter()]
+    [string]$SevenZipPath,
+
+    # Path to Inno Setup compiler (auto-detected if not specified)
+    [Parameter()]
     [string]$InnoSetupPath,
-    [Parameter(Mandatory = $false)]
-    [switch]$checkNewRelease,
-    [Parameter(Mandatory = $false)]
-    [switch]$generateLogsAlways,
-    [Parameter(Mandatory = $false)]
-    [switch]$testMode
+
+    # ========================
+    # MODE SWITCHES
+    # ========================
+
+    # Test mode: uses mock data and test fixtures instead of downloads
+    [switch]$TestMode,
+
+    # Validate that release assets exist (makes API calls, but doesn't download)
+    [switch]$ValidateAssets,
+
+    # Generate changelog in test mode (fetches real release for changelog generation)
+    [switch]$GenerateChangelog,
+
+    # Offline mode: skip all network requests
+    [switch]$OfflineMode,
+
+    # Clean temp directory before starting
+    [switch]$CleanFirst,
+
+    # Check if a new release is available before building
+    [switch]$CheckNewRelease,
+
+    # ========================
+    # GRANULAR CONTROL FLAGS
+    # ========================
+
+    # Skip downloading MinGW archives (use existing or test fixtures)
+    [switch]$SkipDownload,
+
+    # Skip building the installer with Inno Setup
+    [switch]$SkipBuild,
+
+    # Skip generating the changelog
+    [switch]$SkipChangelog,
+
+    # Skip generating file hashes (also skips appending hashes to changelog)
+    [switch]$SkipHashes,
+
+    # Always generate Inno Setup build logs (not just on errors)
+    [switch]$GenerateLogsAlways
 )
 
-# --- Script Setup ---
-$ErrorActionPreference = "Stop" # Exit on unhandled errors
+$ErrorActionPreference = 'Stop'
+
+# ============================================================================
+# Module Loading
+# ============================================================================
+
 . "$PSScriptRoot\modules\pretty.ps1"
+. "$PSScriptRoot\modules\config.ps1"
 . "$PSScriptRoot\modules\functions.ps1"
 
-# --- Environment Preparation ---
-Write-StatusInfo -Type "Script Start" -Message "Easy MinGW Installer Builder"
-Write-SeparatorLine
+# ============================================================================
+# Cancellation Support
+# ============================================================================
+# Store paths and state for cleanup (will be set after config initialization)
 
-# Handle array parameters passed as single comma-separated strings
-if ($archs.Count -eq 1 -and $archs[0].Contains(',')) {
-    $archs = $archs[0].Split(',') | ForEach-Object { $_.Trim() }
-}
-if ($namePatterns.Count -eq 1 -and $namePatterns[0].Contains(',')) {
-    $namePatterns = $namePatterns[0].Split(',') | ForEach-Object { $_.Trim() }
-}
-
-$baseTempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "EasyMinGWInstaller_Build"
-if (Test-Path $baseTempDir) {
-    Remove-DirectoryRecursive -Path $baseTempDir
-}
-Ensure-Directory -Path $baseTempDir
-
-$innoSetupScript = Join-Path -Path $PSScriptRoot -ChildPath "MinGW_Installer.iss"
-if (-not (Test-Path $innoSetupScript -PathType Leaf)) {
-    Write-ErrorMessage -ErrorType "CRITICAL CONFIG" -Message "Inno Setup script not found: $innoSetupScript"
-    Exit 1
+$script:CleanupPaths = @{
+    TempDirectory   = $null
+    OutputDirectory = $null
+    ChangelogPath   = $null
+    StartTime       = $null
 }
 
-Write-LogEntry -Type "7-Zip Path" -Message $7ZipPath
-Write-LogEntry -Type "InnoSetup Path" -Message $InnoSetupPath
-Write-LogEntry -Type "InnoSetup Script" -Message $innoSetupScript
-Write-LogEntry -Type "Base Temp Directory" -Message $baseTempDir
-Write-LogEntry -Type "Final Output Directory" -Message $outputPath
-Write-SeparatorLine
+# ============================================================================
+# Parameter Processing
+# ============================================================================
 
-# --- Main Build Logic ---
-function Main {
-    param(
-        # Add parameters to Main to pass in the required info
-        [Parameter(Mandatory=$true)]
-        $WinLibsReleaseInfo,
-        [Parameter(Mandatory=$true)]
-        [PSCustomObject]$ReleaseMetadata,
-        [Parameter(Mandatory=$true)]
-        [string]$ReleaseNotesPath,
-        $ProjectLatestTag,
-        [Parameter(Mandatory=$true)]
-        [string[]]$Archs,
-        [Parameter(Mandatory=$true)]
-        [string[]]$NamePatterns,
-        [Parameter(Mandatory=$true)]
-        [string]$SevenZipPath,
-        [Parameter(Mandatory=$true)]
-        [string]$InnoSetupPath,
-        [Parameter(Mandatory=$true)]
-        [string]$FinalOutputPath,
-        [Parameter(Mandatory=$true)]
-        [string]$BaseTempDir,
-        [Parameter(Mandatory=$true)]
-        [string]$InnoSetupScriptPath,
-        [Parameter(Mandatory=$true)]
-        [switch]$SkipIfVersionMatchesTag,
-        [Parameter(Mandatory=$true)]
-        [switch]$GenerateLogsAlways,
-        [Parameter(Mandatory=$true)]
-        [switch]$IsTestMode
-    )
-
-    if ($Archs.Length -ne $NamePatterns.Length) {
-        Write-ErrorMessage -ErrorType "CRITICAL CONFIG" -Message "Mismatch between the number of architectures and name patterns."
-        # Returning false will cause the script to exit with an error code
-        return $false
-    }
-
-    $overallSuccess = $true
-    for ($i = 0; $i -lt $Archs.Length; $i++) {
-        $currentArch = $Archs[$i]
-        $currentPattern = $NamePatterns[$i]
-        
-        Write-StatusInfo -Type "Initiating Build" -Message "Architecture: $currentArch-bit, Pattern: $currentPattern"
-        
-        $buildSuccess = Process-MingwCompilation -Architecture $currentArch `
-            -AssetPattern $currentPattern `
-            -WinLibsReleaseInfo $WinLibsReleaseInfo `
-            -ReleaseMetadata $ReleaseMetadata `
-            -ReleaseNotesPath $ReleaseNotesPath `
-            -ProjectLatestTag $ProjectLatestTag `
-            -SevenZipExePath $SevenZipPath `
-            -InnoSetupExePath $InnoSetupPath `
-            -FinalOutputPath $FinalOutputPath `
-            -TempDirectory $BaseTempDir `
-            -InnoSetupScriptPath $InnoSetupScriptPath `
-            -SkipIfVersionMatchesTag:$SkipIfVersionMatchesTag `
-            -GenerateLogsAlways:$GenerateLogsAlways `
-            -IsTestMode:$IsTestMode
-        
-        if (-not $buildSuccess) {
-            Write-ErrorMessage -ErrorType "Architecture Build Failed" -Message "Failed to process $currentArch-bit architecture."
-            $overallSuccess = $false
-        }
-    }
-
-    return $overallSuccess
+# Handle array parameters passed as comma-separated strings
+if ($Archs.Count -eq 1 -and $Archs[0].Contains(',')) {
+    $Archs = $Archs[0].Split(',') | ForEach-Object { $_.Trim() }
+}
+if ($NamePatterns.Count -eq 1 -and $NamePatterns[0].Contains(',')) {
+    $NamePatterns = $NamePatterns[0].Split(',') | ForEach-Object { $_.Trim() }
 }
 
-function Append-HashesToChangelog {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$ChangelogPath,
-        [Parameter(Mandatory = $true)]
-        [string]$OutputPath,
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
-        [Parameter(Mandatory = $true)]
-        [string[]]$Archs
-    )
-    
-    if (-not (Test-Path $ChangelogPath -PathType Leaf)) {
-        Write-WarningMessage -Type "Hash Append" -Message "Changelog file not found at '$ChangelogPath'. Cannot append hashes."
-        return
-    }
+# ============================================================================
+# Configuration Initialization
+# ============================================================================
 
-    Write-StatusInfo -Type "Hash Append" -Message "Appending hashes to changelog..."
-    
-    $changelogContent = Get-Content $ChangelogPath -Raw -Encoding UTF8
-    
-    # Define the backticks as variables to avoid PowerShell interpretation
-    $codeBlockStart = '```text'
-    $codeBlockEnd = '```'
-    
-    foreach ($arch in $Archs) {
-        $hashFileName = "EasyMinGW.Installer.v$($Version).$($arch)-bit.hashes.txt"
-        $hashFilePath = Join-Path -Path $OutputPath -ChildPath $hashFileName
-        $archHeaderMarkdown = "**$($arch)-bit**"
-        
-        if (Test-Path $hashFilePath -PathType Leaf) {
-            # Check if this architecture's hash block already exists
-            $searchPattern = [regex]::Escape($archHeaderMarkdown) + "\s*" + [regex]::Escape($codeBlockStart)
-            if ($changelogContent -notmatch $searchPattern) {
-                Write-StatusInfo -Type "Appending Hashes" -Message "For $arch-bit from $hashFileName"
-                $hashBlockContent = Get-Content $hashFilePath -Raw -Encoding UTF8
-                
-                if ($null -ne $hashBlockContent) {
-                    $hashBlockContent = $hashBlockContent.TrimEnd()
-                    $fullHashBlockToAppend = "`n`n$archHeaderMarkdown`n$codeBlockStart`n$hashBlockContent`n$codeBlockEnd"
-                    Add-Content -Path $ChangelogPath -Value $fullHashBlockToAppend -Encoding UTF8
-                    $changelogContent = Get-Content $ChangelogPath -Raw -Encoding UTF8 # Update for next iteration
-                } else {
-                    Write-WarningMessage -Type "Hash Content Empty" -Message "Hash file '$hashFilePath' is empty. Not appending."
-                }
-            } else {
-                Write-WarningMessage -Type "Hash Append Skip" -Message "Hash block for $arch-bit already found in changelog. Skipping append."
-            }
-        } else {
-            Write-WarningMessage -Type "Hash File Missing" -Message "Hash file not found for $arch-bit at '$hashFilePath'. Cannot append."
-        }
+# Build configuration overrides from parameters
+$configOverrides = @{}
+
+if ($TestMode) {
+    $configOverrides['IsTestMode'] = $true
+}
+if ($PSBoundParameters.ContainsKey('ValidateAssets')) {
+    $configOverrides['ValidateAssets'] = $ValidateAssets.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('GenerateChangelog')) {
+    $configOverrides['GenerateChangelog'] = $GenerateChangelog.IsPresent
+    # GenerateChangelog implies we don't skip changelog
+    if ($GenerateChangelog.IsPresent) {
+        $configOverrides['SkipChangelog'] = $false
     }
 }
+if ($PSBoundParameters.ContainsKey('OfflineMode')) {
+    $configOverrides['OfflineMode'] = $OfflineMode.IsPresent
+    # Offline mode implies skip download and skip changelog
+    if ($OfflineMode.IsPresent) {
+        $configOverrides['SkipDownload'] = $true
+        $configOverrides['SkipChangelog'] = $true
+    }
+}
+if ($PSBoundParameters.ContainsKey('CleanFirst')) {
+    $configOverrides['CleanFirst'] = $CleanFirst.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('SkipDownload')) {
+    $configOverrides['SkipDownload'] = $SkipDownload.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('SkipBuild')) {
+    $configOverrides['SkipBuild'] = $SkipBuild.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('SkipChangelog')) {
+    $configOverrides['SkipChangelog'] = $SkipChangelog.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('SkipHashes')) {
+    $configOverrides['SkipHashes'] = $SkipHashes.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('GenerateLogsAlways')) {
+    $configOverrides['GenerateLogsAlways'] = $GenerateLogsAlways.IsPresent
+}
+if ($SevenZipPath) {
+    $configOverrides['SevenZipPath'] = $SevenZipPath
+}
+if ($InnoSetupPath) {
+    $configOverrides['InnoSetupPath'] = $InnoSetupPath
+}
 
-# --- Script Execution & Cleanup ---
-$scriptSuccess = $false
+# Initialize configuration
+Initialize-BuildConfig -Overrides $configOverrides
+$cfg = Get-BuildConfig
+
+# ============================================================================
+# Clean First (if requested)
+# ============================================================================
+
+if ($cfg.CleanFirst -and (Test-Path $cfg.TempDirectory)) {
+    Write-Host "`n[Clean] Removing temp directory: $($cfg.TempDirectory)" -ForegroundColor Yellow
+    Remove-Item -Path $cfg.TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ============================================================================
+# Build Header & Info Display
+# ============================================================================
+
+Write-BuildHeader -Title 'Easy MinGW Installer Builder'
+
+# Setup paths
+$outputDir = if ($OutputPath) { $OutputPath } else { Join-Path $PSScriptRoot 'output' }
+$issPath = Join-Path $PSScriptRoot 'MinGW_Installer.iss'
+$releaseNotesPath = Join-Path $PSScriptRoot 'release_notes_body.md'
+
+# Update cleanup paths for cancellation handler
+$script:CleanupPaths.TempDirectory = $cfg.TempDirectory
+$script:CleanupPaths.OutputDirectory = $outputDir
+$script:CleanupPaths.ChangelogPath = $releaseNotesPath
+
+# Display build configuration
+Write-BuildInfo -Config $cfg -Architectures $Archs -OutputPath $outputDir
+
+# Verbose logging of paths and directories
+if ($cfg.LogLevel -eq 'Verbose') {
+    Write-SeparatorLine -Character '-' -Length 50
+    Write-LogEntry -Type '7-Zip Path' -Message $cfg.SevenZipPath
+    Write-LogEntry -Type 'InnoSetup Path' -Message $cfg.InnoSetupPath
+    Write-LogEntry -Type 'Temp Directory' -Message $cfg.TempDirectory
+    Write-LogEntry -Type 'Output Directory' -Message $outputDir
+    Write-SeparatorLine -Character '-' -Length 50
+}
+
+# ============================================================================
+# Dependency Validation
+# ============================================================================
+
+$depCheck = Test-BuildDependencies
+if (-not $depCheck.Success) {
+    foreach ($err in $depCheck.Errors) {
+        Write-ErrorMessage -ErrorType 'Dependency' -Message $err
+    }
+    Write-ErrorMessage -ErrorType 'FATAL' -Message 'Required dependencies are missing. Cannot proceed.'
+    exit 1
+}
+
+# Validate Inno Setup script exists
+if (-not $cfg.SkipBuild -and -not (Test-Path $issPath -PathType Leaf)) {
+    Write-ErrorMessage -ErrorType 'FATAL' -Message "Inno Setup script not found: $issPath"
+    exit 1
+}
+
+# Validate arch/pattern count match
+if ($Archs.Count -ne $NamePatterns.Count) {
+    Write-ErrorMessage -ErrorType 'FATAL' -Message "Architecture count ($($Archs.Count)) must match pattern count ($($NamePatterns.Count))"
+    exit 1
+}
+
+# ============================================================================
+# Main Build Process
+# ============================================================================
+
+$buildSuccess = $false
+$buildStartTime = Get-Date
+$script:CleanupPaths.StartTime = $buildStartTime
+
 try {
-    # This logic is moved from Main to the main script body
-    Write-StatusInfo -Type "Main Process" -Message "Starting build operations..."
+    Write-StatusInfo -Type 'Starting' -Message 'Build operations...'
 
-    $projectLatestTag = $null
-    if ($checkNewRelease -and -not $testMode) {
-        $projectLatestTag = Get-LatestGitHubTag -Owner "ehsan18t" -Repo "easy-mingw-installer"
-        if (-not $projectLatestTag) {
-            Write-WarningMessage -Type "Tag Check" -Message "Could not retrieve latest project tag. Version check might be affected."
+    # ========================
+    # Version Resolution
+    # ========================
+    $previousTag = $null
+    $version = $null
+    $releaseDate = (Get-Date).ToString('yyyy-MM-dd')
+    $release = $null
+
+    if ($cfg.IsTestMode) {
+        # Test mode: use mock data by default
+        $version = $cfg.TestModeVersion
+        $previousTag = $version
+        $release = @{ name = 'Test Release'; assets = @() }
+        
+        # If ValidateAssets or GenerateChangelog is set, fetch real release data
+        if ($cfg.ValidateAssets -or $cfg.GenerateChangelog) {
+            Write-StatusInfo -Type 'Test Mode' -Message 'Fetching real release for validation/changelog...'
+            
+            $realRelease = Find-GitHubRelease -Owner $cfg.WinLibsOwner -Repo $cfg.WinLibsRepo -TitlePattern $TitlePattern
+            if ($realRelease) {
+                $release = $realRelease
+                Write-StatusInfo -Type 'Real Release' -Message $realRelease.name
+            }
+            else {
+                Write-WarningMessage -Type 'Validation' -Message "No release matches pattern: $TitlePattern"
+            }
+            
+            # Get last 2 tags for changelog generation (compare between our releases)
+            if ($cfg.GenerateChangelog) {
+                $recentTags = Get-GitHubTags -Owner $cfg.ProjectOwner -Repo $cfg.ProjectRepo -Count 2
+                if ($recentTags.Count -ge 2) {
+                    # Use latest tag as version, second-to-last as previous
+                    $version = $recentTags[0]
+                    $previousTag = $recentTags[1]
+                    Write-StatusInfo -Type 'Current Tag' -Message $version
+                    Write-StatusInfo -Type 'Previous Tag' -Message $previousTag
+                }
+                elseif ($recentTags.Count -eq 1) {
+                    $version = $recentTags[0]
+                    $previousTag = $null
+                    Write-StatusInfo -Type 'Current Tag' -Message $version
+                    Write-WarningMessage -Type 'Changelog' -Message 'No previous tag found for comparison'
+                }
+                else {
+                    Write-WarningMessage -Type 'Changelog' -Message 'No tags found - using test version'
+                }
+            }
+            elseif ($realRelease) {
+                # Just validating assets - use release date as version
+                $publishedDate = [datetime]$realRelease.published_at
+                $version = $publishedDate.ToString('yyyy.MM.dd')
+                $releaseDate = $publishedDate.ToString('yyyy-MM-dd')
+            }
         }
-    } elseif ($testMode) {
-        $projectLatestTag = "2024.10.05" # Example for testing version check logic
-        Write-StatusInfo -Type "Tag (Test Mode)" -Message $projectLatestTag
-    }
-
-    $winLibsReleaseInfo = $null
-    if (-not $testMode) {
-        $winLibsReleaseInfo = Find-GitHubRelease -Owner "brechtsanders" -Repo "winlibs_mingw" -TitlePattern $titlePattern
-        if (-not $winLibsReleaseInfo) {
-            Write-ErrorMessage -ErrorType "CRITICAL" -Message "No matching WinLibs release found for pattern: $titlePattern. Cannot proceed."
-            throw "No WinLibs release found." # Throw to trigger catch block
+        else {
+            Write-StatusInfo -Type 'Version' -Message "$version (test mode)"
         }
-    } else {
-        Write-StatusInfo -Type "Release (Test Mode)" -Message "Skipping actual WinLibs release fetching."
-        $winLibsReleaseInfo = [PSCustomObject]@{ name = "Test Release"; published_at = (Get-Date).ToString("o"); assets = @() }
+    }
+    else {
+        # Get project's latest tag for comparison
+        if ($CheckNewRelease) {
+            $previousTag = Get-LatestGitHubTag -Owner $cfg.ProjectOwner -Repo $cfg.ProjectRepo
+            if ($previousTag) {
+                Write-StatusInfo -Type 'Current Tag' -Message $previousTag
+            }
+        }
+
+        # Find matching WinLibs release
+        $release = Find-GitHubRelease -Owner $cfg.WinLibsOwner -Repo $cfg.WinLibsRepo -TitlePattern $TitlePattern
+        if (-not $release) {
+            Write-ErrorMessage -ErrorType 'FATAL' -Message "No WinLibs release matches pattern: $TitlePattern"
+            exit 1
+        }
+
+        # Extract version from release date
+        $publishedDate = [datetime]$release.published_at
+        $version = $publishedDate.ToString('yyyy.MM.dd')
+        $releaseDate = $publishedDate.ToString('yyyy-MM-dd')
+
+        Write-StatusInfo -Type 'Target Version' -Message $version
+        Write-StatusInfo -Type 'Release Date' -Message $releaseDate
     }
 
-    $releaseMetadata = Get-ReleaseMetadata -ReleaseInfo $winLibsReleaseInfo -IsTestMode:$testMode
-    $targetVersion = $releaseMetadata.Version
-    if (-not $targetVersion) {
-        Write-ErrorMessage -ErrorType "CRITICAL" -Message "Could not determine the global release version. Cannot proceed."
-        throw "Could not determine global release version."
+    # ========================
+    # Version Check (Skip if up-to-date)
+    # ========================
+    if ($CheckNewRelease -and -not $cfg.IsTestMode -and $previousTag -eq $version) {
+        Write-SeparatorLine -Character '=' -Length 50
+        Write-SuccessMessage -Type 'Up to Date' -Message "Already at version $version - no build required"
+        $buildSuccess = $true
     }
+    else {
+        # ========================
+        # Build Each Architecture
+        # ========================
+        $buildSuccess = $true
+        
+        # In test mode with GenerateChangelog, pass current tag to fetch from GitHub
+        $currentTagForChangelog = $null
+        if ($cfg.IsTestMode -and $cfg.GenerateChangelog) {
+            $currentTagForChangelog = $version
+        }
 
-    Write-StatusInfo -Type "Global Release Version" -Message "This build run targets version: $targetVersion"
-    if (-not $testMode) {
-        Write-StatusInfo -Type "Release Date" -Message $releaseMetadata.PublishedDateDisplay
-    }
+        for ($i = 0; $i -lt $Archs.Count; $i++) {
+            $arch = $Archs[$i]
+            $pattern = $NamePatterns[$i]
 
-    $releaseNotesBodyPath = Join-Path -Path $PSScriptRoot -ChildPath 'release_notes_body.md'
+            $archResult = Invoke-ArchitectureBuild `
+                -Architecture $arch `
+                -AssetPattern $pattern `
+                -Release $release `
+                -Version $version `
+                -Date $releaseDate `
+                -PreviousTag $previousTag `
+                -CurrentTag $currentTagForChangelog `
+                -OutputDirectory $outputDir `
+                -TempDirectory $cfg.TempDirectory `
+                -IssPath $issPath `
+                -ReleaseNotesPath $releaseNotesPath
 
-    if ($checkNewRelease -and -not $testMode -and $projectLatestTag -eq $targetVersion) {
-        Write-SeparatorLine
-        Write-SuccessMessage -Type "Version Check" -Message "Project tag '$projectLatestTag' matches the latest release version. No new build is required."
-        # Set success to true and the script will exit gracefully in the finally block
-        $scriptSuccess = $true 
-    } else {
-        # Call Main with all necessary parameters
-        $scriptSuccess = Main -WinLibsReleaseInfo $winLibsReleaseInfo `
-                              -ReleaseMetadata $releaseMetadata `
-                              -ReleaseNotesPath $releaseNotesBodyPath `
-                              -ProjectLatestTag $projectLatestTag `
-                              -Archs $archs `
-                              -NamePatterns $namePatterns `
-                              -SevenZipPath $7ZipPath `
-                              -InnoSetupPath $InnoSetupPath `
-                              -FinalOutputPath $outputPath `
-                              -BaseTempDir $baseTempDir `
-                              -InnoSetupScriptPath $innoSetupScript `
-                              -SkipIfVersionMatchesTag:$checkNewRelease `
-                              -GenerateLogsAlways:$generateLogsAlways `
-                              -IsTestMode:$testMode
+            if (-not $archResult) {
+                Write-ErrorMessage -ErrorType 'Build Failed' -Message "$arch-bit architecture failed"
+                $buildSuccess = $false
+            }
+        }
 
-        # Append hashes to changelog after all builds are complete
-        if ($scriptSuccess) {
-            if (Test-Path $releaseNotesBodyPath -PathType Leaf) {
+        # ========================
+        # Post-Build: Append Hashes to Changelog
+        # ========================
+        if ($buildSuccess -and -not $cfg.SkipBuild -and -not $cfg.SkipHashes) {
+            if (Test-Path $releaseNotesPath) {
                 Write-SeparatorLine
-                Append-HashesToChangelog -ChangelogPath $releaseNotesBodyPath -OutputPath $outputPath -Version $targetVersion -Archs $archs
-            } else {
-                Write-WarningMessage -Type "Hash Append" -Message "Cannot append hashes: changelog file '$releaseNotesBodyPath' not found."
+                Add-HashesToChangelog `
+                    -ChangelogPath $releaseNotesPath `
+                    -OutputDirectory $outputDir `
+                    -Version $version `
+                    -Architectures $Archs
             }
         }
     }
+}
+catch [System.Management.Automation.PipelineStoppedException] {
+    # Ctrl+C was pressed - perform cleanup
+    Set-BuildCancelled
+    Invoke-CancellationCleanup `
+        -TempDirectory $script:CleanupPaths.TempDirectory `
+        -OutputDirectory $script:CleanupPaths.OutputDirectory `
+        -ChangelogPath $script:CleanupPaths.ChangelogPath `
+        -StartTime $script:CleanupPaths.StartTime
+    exit 1
 }
 catch {
-    Write-ErrorMessage -ErrorType "FATAL SCRIPT ERROR" -Message "An unhandled error occurred: $($_.Exception.ToString())"
-    $scriptSuccess = $false
+    Write-ErrorMessage -ErrorType 'FATAL' -Message "Unhandled error: $($_.Exception.Message)"
+    
+    if ($cfg.IsGitHubActions) {
+        Write-GitHubActionsError -Message $_.Exception.ToString()
+    }
+    
+    $buildSuccess = $false
 }
 finally {
-    Write-SeparatorLine
-    Write-StatusInfo -Type "Cleanup" -Message "Removing base temporary directory: $baseTempDir"
-    Remove-DirectoryRecursive -Path $baseTempDir # Cleanup base temp dir
+    # Skip cleanup if build was cancelled (cancellation handler already cleaned up)
+    if (Test-BuildCancelled) {
+        exit 1
+    }
+
+    # ========================
+    # Cleanup Child Processes
+    # ========================
+    # Clear tracked processes (they should have finished normally)
+    Clear-ChildProcesses
+
+    # ========================
+    # Cleanup Temp Directory
+    # ========================
+    if (-not $cfg.IsTestMode -and (Test-Path $cfg.TempDirectory)) {
+        Write-VerboseLog "Cleaning up temp directory: $($cfg.TempDirectory)"
+        Remove-Item $cfg.TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    elseif ($cfg.IsTestMode) {
+        Write-StatusInfo -Type 'Cleanup' -Message "Skipped (test mode) - Temp: $($cfg.TempDirectory)"
+    }
+
+    # ========================
+    # Build Summary
+    # ========================
+    $buildDuration = (Get-Date) - $buildStartTime
     
-    if ($scriptSuccess) {
-        Write-StatusInfo -Type "Script End" -Message "Build process completed successfully."
-    } else {
-        Write-ErrorMessage -ErrorType "Script End" -Message "Build process finished with errors."
-        Exit 1 # Ensure a non-zero exit code for CI/CD or automation
+    Write-BuildSummary `
+        -Success $buildSuccess `
+        -Version $version `
+        -Architectures $Archs `
+        -OutputPath $outputDir `
+        -Duration $buildDuration
+
+    if (-not $buildSuccess) {
+        exit 1
     }
 }

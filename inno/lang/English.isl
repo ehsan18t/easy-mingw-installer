@@ -211,14 +211,11 @@ ReadyMemoGroup=Start Menu folder:
 ReadyMemoTasks=Additional tasks:
 
 ; *** TDownloadWizardPage wizard page and DownloadTemporaryFile
-DownloadingLabel=Downloading additional files...
 ButtonStopDownload=&Stop download
 StopDownload=Are you sure you want to stop the download?
 ErrorDownloadAborted=Download aborted
 ErrorDownloadFailed=Download failed: %1 %2
 ErrorDownloadSizeFailed=Getting size failed: %1 %2
-ErrorFileHash1=File hash failed: %1
-ErrorFileHash2=Invalid file hash: expected %1, found %2
 ErrorProgress=Invalid progress: %1 of %2
 ErrorFileSize=Invalid file size: expected %1, found %2
 
@@ -364,6 +361,31 @@ StatusUninstalling=Uninstalling %1...
 ; *** Shutdown block reasons
 ShutdownBlockReasonInstallingApp=Installing %1.
 ShutdownBlockReasonUninstallingApp=Uninstalling %1.
+
+; *** Downloading and Extracting messages (Inno Setup 6.1+)
+DownloadingLabel2=Downloading files...
+ExtractingLabel=Extracting files...
+ButtonStopExtraction=&Stop extraction
+StopExtraction=Are you sure you want to stop the extraction?
+ErrorExtractionAborted=Extraction aborted
+ErrorExtractionFailed=Extraction failed: %1
+ArchiveIncorrectPassword=The password is incorrect
+ArchiveIsCorrupted=The archive is corrupted
+ArchiveUnsupportedFormat=The archive format is unsupported
+RetryCancelSelectAction=Select action
+RetryCancelRetry=&Try again
+RetryCancelCancel=Cancel
+StatusDownloadFiles=Downloading files...
+
+; *** Verification messages (Inno Setup 6.1+)
+SourceVerificationFailed=Verification of the source file failed: %1
+VerificationSignatureDoesntExist=The signature file "%1" does not exist
+VerificationSignatureInvalid=The signature file "%1" is invalid
+VerificationKeyNotFound=The signature file "%1" uses an unknown key
+VerificationFileNameIncorrect=The name of the file is incorrect
+VerificationFileTagIncorrect=The tag of the file is incorrect
+VerificationFileSizeIncorrect=The size of the file is incorrect
+VerificationFileHashIncorrect=The hash of the file is incorrect
 
 ; The custom messages below aren't used by Setup itself, but if you make
 ; use of them in your scripts, you'll want to translate them.

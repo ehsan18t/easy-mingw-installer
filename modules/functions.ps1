@@ -1,637 +1,1265 @@
-$script:GitHubApiCache = @{}
-$script:ReleaseNotesGenerated = $false
+# ============================================================================
+# Easy MinGW Installer - Core Functions Module
+# ============================================================================
+# Contains all business logic for the build process:
+#   - GitHub API interactions
+#   - File downloads and extraction
+#   - Test fixture generation
+#   - Changelog generation
+#   - Installer building and hash generation
+# ============================================================================
+
+# API response cache to avoid duplicate requests
+$script:ApiCache = @{}
+
+# Track spawned child processes for cancellation support
+$script:ChildProcesses = [System.Collections.ArrayList]::new()
+$script:BuildCancelled = $false
+
+# ============================================================================
+# Process Management Functions
+# ============================================================================
+
+function Register-ChildProcess {
+    <#
+    .SYNOPSIS
+        Registers a child process for tracking (used for cancellation).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Diagnostics.Process]$Process
+    )
+    [void]$script:ChildProcesses.Add($Process)
+}
+
+function Stop-AllChildProcesses {
+    <#
+    .SYNOPSIS
+        Stops all tracked child processes. Called during cancellation.
+    #>
+    [CmdletBinding()]
+    param()
+
+    foreach ($proc in $script:ChildProcesses) {
+        try {
+            if ($proc -and -not $proc.HasExited) {
+                Write-Host "  Killing: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
+                $proc.Kill()
+                $proc.WaitForExit(5000)  # Wait up to 5 seconds
+            }
+        }
+        catch {
+            # Process may have already exited, try taskkill as fallback
+            try {
+                $null = & taskkill /F /PID $proc.Id 2>&1
+            }
+            catch { }
+        }
+    }
+    $script:ChildProcesses.Clear()
+}
+
+function Clear-ChildProcesses {
+    <#
+    .SYNOPSIS
+        Clears the child process list (called after successful completion).
+    #>
+    [CmdletBinding()]
+    param()
+    $script:ChildProcesses.Clear()
+}
+
+function Test-BuildCancelled {
+    <#
+    .SYNOPSIS
+        Returns whether the build has been cancelled.
+    #>
+    return $script:BuildCancelled
+}
+
+function Set-BuildCancelled {
+    <#
+    .SYNOPSIS
+        Marks the build as cancelled.
+    #>
+    $script:BuildCancelled = $true
+}
+
+function Invoke-CancellationCleanup {
+    <#
+    .SYNOPSIS
+        Performs cleanup when build is cancelled - kills processes and removes outputs.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$TempDirectory,
+        [string]$OutputDirectory,
+        [string]$ChangelogPath,
+        [DateTime]$StartTime
+    )
+
+    Write-Host ""
+    Write-SeparatorLine -Character '=' -Length 60
+    Write-WarningMessage -Type 'CANCELLED' -Message 'Build interrupted - cleaning up...'
+    Write-SeparatorLine -Character '-' -Length 60
+
+    # Kill child processes
+    Write-Host ""
+    Write-StatusInfo -Type 'Processes' -Message 'Terminating child processes...'
+    if ($script:ChildProcesses.Count -gt 0) {
+        Stop-AllChildProcesses
+        Write-SuccessMessage -Type 'Processes' -Message 'All child processes terminated'
+    }
+    else {
+        Write-StatusInfo -Type 'Processes' -Message 'No child processes to stop'
+    }
+
+    # Clean temp directory
+    if ($TempDirectory -and (Test-Path $TempDirectory)) {
+        try {
+            Remove-Item $TempDirectory -Recurse -Force -ErrorAction Stop
+            Write-SuccessMessage -Type 'Temp' -Message "Removed: $TempDirectory"
+        }
+        catch {
+            Write-WarningMessage -Type 'Temp' -Message "Failed to remove: $TempDirectory"
+        }
+    }
+
+    # Clean output directory
+    if ($OutputDirectory -and (Test-Path $OutputDirectory)) {
+        try {
+            Remove-Item $OutputDirectory -Recurse -Force -ErrorAction Stop
+            Write-SuccessMessage -Type 'Output' -Message "Removed: $OutputDirectory"
+        }
+        catch {
+            Write-WarningMessage -Type 'Output' -Message "Failed to remove: $OutputDirectory"
+        }
+    }
+
+    # Clean changelog
+    if ($ChangelogPath -and (Test-Path $ChangelogPath)) {
+        try {
+            Remove-Item $ChangelogPath -Force -ErrorAction Stop
+            Write-SuccessMessage -Type 'Changelog' -Message "Removed: $(Split-Path $ChangelogPath -Leaf)"
+        }
+        catch {
+            Write-WarningMessage -Type 'Changelog' -Message "Failed to remove changelog"
+        }
+    }
+
+    # Clean log files in script root
+    $scriptRoot = Split-Path $PSScriptRoot -Parent
+    $logFiles = Get-ChildItem -Path $scriptRoot -Filter "*.log" -File -ErrorAction SilentlyContinue
+    if ($logFiles) {
+        $removedCount = 0
+        foreach ($log in $logFiles) {
+            try {
+                Remove-Item $log.FullName -Force -ErrorAction Stop
+                $removedCount++
+            }
+            catch { }
+        }
+        if ($removedCount -gt 0) {
+            Write-SuccessMessage -Type 'Logs' -Message "Removed $removedCount log file(s)"
+        }
+    }
+
+    # Calculate duration if start time provided
+    $duration = if ($StartTime) { (Get-Date) - $StartTime } else { $null }
+
+    # Final summary
+    Write-Host ""
+    Write-BuildSummary -Success $false -Cancelled -Duration $duration
+}
+
+function Wait-ProcessWithCleanup {
+    <#
+    .SYNOPSIS
+        Waits for a process to exit, with support for Ctrl+C cleanup.
+        Uses polling to allow the finally block to execute on termination.
+    .PARAMETER Process
+        The process to wait for.
+    .PARAMETER CleanupPaths
+        Hashtable with TempDirectory, OutputDirectory, ChangelogPath for cleanup.
+    .OUTPUTS
+        $true if process completed, $false if interrupted.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Diagnostics.Process]$Process,
+
+        [Parameter()]
+        [hashtable]$CleanupPaths
+    )
+
+    try {
+        # Poll every 500ms so we can respond to Ctrl+C
+        while (-not $Process.HasExited) {
+            $Process.WaitForExit(500)
+        }
+        return $true
+    }
+    catch [System.Management.Automation.PipelineStoppedException] {
+        # Ctrl+C was pressed
+        Set-BuildCancelled
+        
+        if ($CleanupPaths) {
+            Invoke-CancellationCleanup @CleanupPaths
+        }
+        else {
+            Stop-AllChildProcesses
+        }
+        
+        throw
+    }
+}
+
+# ============================================================================
+# GitHub API Functions
+# ============================================================================
 
 function Invoke-GitHubApi {
+    <#
+    .SYNOPSIS
+        Makes a request to the GitHub API with caching and error handling.
+    .PARAMETER Uri
+        The full API endpoint URL.
+    .OUTPUTS
+        The API response object, or $null on failure.
+    #>
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Uri,
-        [string]$Method = "GET",
-        [hashtable]$Headers = @{ "Accept" = "application/vnd.github.v3+json" },
-        [int]$TimeoutSec = 30
+    param(
+        [Parameter(Mandatory)]
+        [string]$Uri
     )
-    if (-not $Headers.ContainsKey('User-Agent')) {
-        $Headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+
+    # Return cached response if available
+    if ($script:ApiCache.ContainsKey($Uri)) {
+        Write-VerboseLog "API cache hit: $Uri"
+        return $script:ApiCache[$Uri]
     }
-    if ($Method -eq 'GET' -and $script:GitHubApiCache.ContainsKey($Uri)) {
-        return $script:GitHubApiCache[$Uri]
-    }
+
+    $cfg = Get-BuildConfig
+
     try {
-        Write-LogEntry -Type "GitHub API" -Message "Requesting $Uri"
-        $response = Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
-        if ($Method -eq 'GET') {
-            $script:GitHubApiCache[$Uri] = $response
+        $headers = @{
+            'User-Agent' = $cfg.GitHubUserAgent
+            'Accept'     = 'application/vnd.github.v3+json'
         }
-        return $response
+
+        Write-VerboseLog "API request: $Uri"
+        $result = Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $cfg.ApiTimeoutSeconds
+
+        # Cache successful responses
+        $script:ApiCache[$Uri] = $result
+        return $result
     }
     catch {
-        Write-ErrorMessage -ErrorType "API Request Failed" -Message "Error fetching '$Uri': $($_.Exception.Message)"
+        Write-WarningMessage -Type 'API Error' -Message "Failed: $Uri"
+        Write-VerboseLog "API error details: $($_.Exception.Message)"
         return $null
     }
 }
 
 function Get-LatestGitHubTag {
+    <#
+    .SYNOPSIS
+        Gets the latest tag from a GitHub repository.
+    .PARAMETER Owner
+        Repository owner (username or organization).
+    .PARAMETER Repo
+        Repository name.
+    .OUTPUTS
+        The tag name string, or $null if not found.
+    #>
     [CmdletBinding()]
-    [OutputType([string])]
-    param (
-        [Parameter(Mandatory = $true)]
+    param(
+        [Parameter(Mandatory)]
         [string]$Owner,
-        [Parameter(Mandatory = $true)]
+
+        [Parameter(Mandatory)]
         [string]$Repo
     )
-    $tagsUrl = "https://api.github.com/repos/$Owner/$Repo/tags"
-    $tagsInfo = Invoke-GitHubApi -Uri $tagsUrl
-    if ($tagsInfo -and $tagsInfo.Count -gt 0) {
-        Write-StatusInfo -Type "Latest Tag" -Message "$($tagsInfo[0].name) (for $Owner/$Repo)"
-        return $tagsInfo[0].name
+
+    $cfg = Get-BuildConfig
+    $uri = "$($cfg.GitHubApiBase)/repos/$Owner/$Repo/tags"
+    $tags = Invoke-GitHubApi $uri
+
+    if ($tags -and $tags.Count -gt 0) {
+        $latestTag = $tags[0].name
+        Write-VerboseLog "Latest tag for $Owner/$Repo : $latestTag"
+        return $latestTag
     }
-    Write-WarningMessage -Type "API Warning" -Message "No tags found for $Owner/$Repo."
+
     return $null
 }
 
-function Find-GitHubRelease {
+function Get-GitHubTags {
+    <#
+    .SYNOPSIS
+        Gets multiple tags from a GitHub repository.
+    .PARAMETER Owner
+        Repository owner (username or organization).
+    .PARAMETER Repo
+        Repository name.
+    .PARAMETER Count
+        Number of tags to return (default: 2).
+    .OUTPUTS
+        Array of tag name strings.
+    #>
     [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param (
-        [Parameter(Mandatory = $true)]
+    param(
+        [Parameter(Mandatory)]
         [string]$Owner,
-        [Parameter(Mandatory = $true)]
+
+        [Parameter(Mandatory)]
         [string]$Repo,
-        [Parameter(Mandatory = $true)]
+
+        [Parameter()]
+        [int]$Count = 2
+    )
+
+    $cfg = Get-BuildConfig
+    $uri = "$($cfg.GitHubApiBase)/repos/$Owner/$Repo/tags"
+    $tags = Invoke-GitHubApi $uri
+
+    if ($tags -and $tags.Count -gt 0) {
+        $result = $tags | Select-Object -First $Count | ForEach-Object { $_.name }
+        Write-VerboseLog "Tags for $Owner/$Repo : $($result -join ', ')"
+        return $result
+    }
+
+    return @()
+}
+
+function Find-GitHubRelease {
+    <#
+    .SYNOPSIS
+        Finds a GitHub release matching a title pattern.
+    .DESCRIPTION
+        Searches releases for a match, excluding prereleases,
+        and returns the most recently published match.
+    .PARAMETER Owner
+        Repository owner.
+    .PARAMETER Repo
+        Repository name.
+    .PARAMETER TitlePattern
+        Wildcard pattern to match against release titles.
+    .OUTPUTS
+        The release object, or $null if not found.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Owner,
+
+        [Parameter(Mandatory)]
+        [string]$Repo,
+
+        [Parameter(Mandatory)]
         [string]$TitlePattern
     )
-    $releasesUrl = "https://api.github.com/repos/$Owner/$Repo/releases"
-    $releasesInfo = Invoke-GitHubApi -Uri $releasesUrl
-    $selectedRelease = $null
 
-    if ($releasesInfo) {
-        $selectedRelease = $releasesInfo |
-            Where-Object { $_.name -like $TitlePattern -and -not $_.prerelease } |
-            Sort-Object { Get-Date $_.published_at } -Descending |
-            Select-Object -First 1
+    $cfg = Get-BuildConfig
+    $uri = "$($cfg.GitHubApiBase)/repos/$Owner/$Repo/releases"
+    $releases = Invoke-GitHubApi $uri
+
+    if (-not $releases) {
+        return $null
     }
 
-    if ($selectedRelease) {
-        Write-StatusInfo -Type "Selected Release" -Message "$($selectedRelease.name) (from $Owner/$Repo)"
-        $parsedTime = ConvertTo-VersionStringFromDate -DateString $selectedRelease.published_at -FormatType Display
-        Write-StatusInfo -Type "Release Date" -Message $parsedTime
-    } else {
-        Write-WarningMessage -Type "Release Search" -Message "No release found matching pattern '$TitlePattern' for $Owner/$Repo."
+    # Filter by pattern, exclude prereleases, sort by date
+    $match = $releases |
+        Where-Object { $_.name -like $TitlePattern -and -not $_.prerelease } |
+        Sort-Object { [datetime]$_.published_at } -Descending |
+        Select-Object -First 1
+
+    if ($match) {
+        Write-StatusInfo -Type 'Release Found' -Message $match.name
     }
-    return $selectedRelease
+
+    return $match
 }
 
-function ConvertTo-VersionStringFromDate {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$DateString,
-        [ValidateSet("Version", "Display")]
-        [string]$FormatType = "Display"
-    )
-    try {
-        $dateObject = Get-Date -Date $DateString
-        if ($FormatType -eq "Version") {
-            return $dateObject.ToString("yyyy.MM.dd")
-        }
-        return $dateObject.ToString("dd-MMM-yyyy HH:mm:ss")
-    }
-    catch {
-        Write-WarningMessage -Type "Date Format" -Message "Could not parse date string '$DateString': $($_.Exception.Message)"
-        return $DateString # Return original if parsing fails
-    }
-}
+# ============================================================================
+# Download & Extraction Functions
+# ============================================================================
 
-function Invoke-DownloadFile {
+function Invoke-FileDownload {
+    <#
+    .SYNOPSIS
+        Downloads a file with retry logic and detailed progress display.
+    .PARAMETER Url
+        The URL to download from.
+    .PARAMETER Destination
+        The local file path to save to.
+    .OUTPUTS
+        $true on success, $false on failure.
+    #>
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
+    param(
+        [Parameter(Mandatory)]
         [string]$Url,
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationFile,
-        [Parameter(Mandatory = $false)]
-        [int]$MaxRetries = 3,
-        [Parameter(Mandatory = $false)]
-        [int]$RetryDelaySeconds = 5,
-        [Parameter(Mandatory = $false)]
-        [int]$TimeoutSeconds = 60
+
+        [Parameter(Mandatory)]
+        [string]$Destination
     )
 
-    Write-ActionProgress -ActionName "Preparing Download" -Details "From: $Url"
-    $destinationDirectory = Split-Path -Path $DestinationFile -Parent
-    if ($destinationDirectory) { Ensure-Directory -Path $destinationDirectory }
+    $cfg = Get-BuildConfig
+    $fileName = Split-Path $Url -Leaf
+    Write-StatusInfo -Type 'Downloading' -Message $fileName
 
-    $userAgent = "Easy-MinGW-Installer-Builder-Script/1.0"
-    $isGitHubActions = $env:GITHUB_ACTIONS -eq "true"
-    $currentTry = 0
-    $downloadSuccess = $false
+    # Ensure destination directory exists
+    $destDir = Split-Path $Destination -Parent
+    if ($destDir -and -not (Test-Path $destDir)) {
+        New-Item $destDir -ItemType Directory -Force | Out-Null
+    }
 
-    while ($currentTry -lt $MaxRetries -and -not $downloadSuccess) {
-        $currentTry++
-        if ($currentTry -gt 1) {
-            Write-WarningMessage -Type "Download Retry" -Message "Attempt $($currentTry) of $($MaxRetries) after $($RetryDelaySeconds) seconds..."
-            Start-Sleep -Seconds $RetryDelaySeconds
-        }
-
-        # Initial download message for the current attempt (not updating)
-        if (-not $isGitHubActions) {
-            Write-LogEntry -Type "Download" -Message "Starting download attempt $currentTry for $Url..."
-        }
-
-
-        $webRequest = $null
-        $response = $null
-        $responseStream = $null
-        $targetStream = $null
-
+    # Retry loop
+    for ($attempt = 1; $attempt -le $cfg.DownloadRetries; $attempt++) {
         try {
-            $webRequest = [System.Net.HttpWebRequest]::Create($Url)
-            $webRequest.UserAgent = $userAgent
-            $webRequest.Timeout = $TimeoutSeconds * 1000
-
-            $response = $webRequest.GetResponse()
-            $totalLength = $response.ContentLength
-            $totalLengthKB = [System.Math]::Floor($totalLength / 1024)
-            $responseStream = $response.GetResponseStream()
-
-            $targetStream = [System.IO.File]::Create($DestinationFile)
-            $buffer = New-Object byte[] 80KB
-            $downloadedBytes = 0
-            $lastReportedProgressPercentage = -1
-
-            while ($true) {
-                $bytesRead = $responseStream.Read($buffer, 0, $buffer.Length)
-                if ($bytesRead -eq 0) { break }
-
-                $targetStream.Write($buffer, 0, $bytesRead)
-                $downloadedBytes += $bytesRead
-
-                if (-not $isGitHubActions -and $totalLength -gt 0) {
-                    $currentProgressPercentage = [System.Math]::Floor(($downloadedBytes / $totalLength) * 100)
-                    if ($currentProgressPercentage -gt $lastReportedProgressPercentage) {
-                        # Construct the full progress string for the updating line
-                        $progressText = "    Progress (Attempt $currentTry): $([System.Math]::Floor($downloadedBytes / 1024))KB / ${totalLengthKB}KB ($currentProgressPercentage%)"
-                        Write-UpdatingLine -Text $progressText # Use the new function
-                        $lastReportedProgressPercentage = $currentProgressPercentage
+            # Use HttpWebRequest for progress tracking in console, Invoke-WebRequest in GitHub Actions
+            if ($cfg.IsGitHubActions) {
+                $ProgressPreference = 'SilentlyContinue'
+                Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+            }
+            else {
+                # HttpWebRequest with progress display
+                $webRequest = [System.Net.HttpWebRequest]::Create($Url)
+                $webRequest.UserAgent = $cfg.GitHubUserAgent
+                $webRequest.Timeout = $cfg.ApiTimeoutSeconds * 1000
+                
+                $response = $webRequest.GetResponse()
+                $totalLength = $response.ContentLength
+                $totalLengthKB = [math]::Round($totalLength / 1KB, 0)
+                
+                $responseStream = $response.GetResponseStream()
+                $fileStream = [System.IO.FileStream]::new($Destination, [System.IO.FileMode]::Create)
+                
+                $buffer = New-Object byte[] $cfg.DownloadBufferSize
+                $downloadedBytes = 0
+                $lastProgressUpdate = [DateTime]::MinValue
+                
+                try {
+                    while (($bytesRead = $responseStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                        $fileStream.Write($buffer, 0, $bytesRead)
+                        $downloadedBytes += $bytesRead
+                        
+                        # Update progress every 100ms to avoid console flicker
+                        $now = [DateTime]::Now
+                        if (($now - $lastProgressUpdate).TotalMilliseconds -ge 100) {
+                            $downloadedKB = [math]::Round($downloadedBytes / 1KB, 0)
+                            $percentage = if ($totalLength -gt 0) { [math]::Round(($downloadedBytes / $totalLength) * 100, 0) } else { 0 }
+                            Write-UpdatingLine -Text "  Progress (Attempt $attempt): ${downloadedKB}KB / ${totalLengthKB}KB ($percentage%)"
+                            $lastProgressUpdate = $now
+                        }
                     }
                 }
+                finally {
+                    $fileStream.Close()
+                    $responseStream.Close()
+                    $response.Close()
+                }
+                
+                End-UpdatingLine
+            }
+
+            if (Test-Path $Destination) {
+                $fileSize = (Get-Item $Destination).Length
+                $sizeDisplay = Format-FileSize $fileSize
+                Write-SuccessMessage -Type 'Downloaded' -Message "$fileName ($sizeDisplay)"
+                return $true
+            }
+        }
+        catch {
+            # Clean up partial download
+            if (Test-Path $Destination) {
+                Remove-Item $Destination -Force -ErrorAction SilentlyContinue
             }
             
-            if (-not $isGitHubActions) {
-                End-UpdatingLine # Finalize the updating line by printing a newline
-            }
+            Write-WarningMessage -Type "Attempt $attempt" -Message $_.Exception.Message
 
-            Write-ColoredHost -Text "    Download successful: $DestinationFile (Attempt $currentTry)" -ForegroundColor $script:colors.Green
-            $downloadSuccess = $true
-        }
-        catch [System.Net.WebException] {
-            if (-not $isGitHubActions) { End-UpdatingLine } # Ensure newline if error occurs mid-progress
-            $ex = $_.Exception
-            $errorMessage = "WebException during download (Attempt $currentTry): $($ex.Message)"
-            if ($ex.Response) {
-                $statusCode = [int]$ex.Response.StatusCode
-                $statusDescription = $ex.Response.StatusDescription
-                $errorMessage += " | Status: $statusCode ($statusDescription)"
+            if ($attempt -lt $cfg.DownloadRetries) {
+                Write-VerboseLog "Retrying in $($cfg.DownloadRetryDelaySeconds) seconds..."
+                Start-Sleep -Seconds $cfg.DownloadRetryDelaySeconds
             }
-            Write-ErrorMessage -ErrorType "Download Attempt Failed" -Message $errorMessage
-            if ($ex.Response) { $ex.Response.Dispose() }
-        }
-        catch {
-            if (-not $isGitHubActions) { End-UpdatingLine } # Ensure newline if error occurs mid-progress
-            Write-ErrorMessage -ErrorType "Download Attempt Failed" -Message "Generic error during download (Attempt $currentTry): $($_.Exception.Message)"
-        }
-        finally {
-            if ($targetStream) { $targetStream.Dispose() }
-            if ($responseStream) { $responseStream.Dispose() }
-            if ($response) { $response.Dispose() }
         }
     }
 
-    if (-not $downloadSuccess) {
-        Write-ErrorMessage -ErrorType "Download Failed" -Message "Failed to download '$Url' after $MaxRetries attempts."
-    }
-    return $downloadSuccess
+    Write-ErrorMessage -ErrorType 'Download Failed' -Message "Failed after $($cfg.DownloadRetries) attempts: $fileName"
+    return $false
 }
 
-function Start-SevenZipExtraction {
+function Expand-7ZipArchive {
+    <#
+    .SYNOPSIS
+        Extracts an archive using 7-Zip.
+    .PARAMETER ArchivePath
+        Path to the archive file.
+    .PARAMETER DestinationPath
+        Directory to extract to.
+    .OUTPUTS
+        $true on success, $false on failure.
+    #>
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
+    param(
+        [Parameter(Mandatory)]
         [string]$ArchivePath,
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationPath,
-        [Parameter(Mandatory = $true)]
-        [string]$SevenZipExePath
+
+        [Parameter(Mandatory)]
+        [string]$DestinationPath
     )
-    Write-ActionProgress -ActionName "Extracting" -Details $ArchivePath
-    if (-not (Test-Path $SevenZipExePath -PathType Leaf)) {
-        Write-ErrorMessage -ErrorType "Configuration Error" -Message "7-Zip executable not found at '$SevenZipExePath'."
-        throw "7-Zip not found at $SevenZipExePath"
-    }
+
+    $cfg = Get-BuildConfig
+    $archiveName = Split-Path $ArchivePath -Leaf
+
+    Write-StatusInfo -Type 'Extracting' -Message $archiveName
+
+    # Run 7-Zip with output redirected (suppress verbose logging)
     $arguments = "x `"$ArchivePath`" -o`"$DestinationPath`" -y"
-    try {
-        $process = Start-Process -FilePath $SevenZipExePath -ArgumentList $arguments -Wait -NoNewWindow -PassThru -ErrorAction Stop
-        if ($process.ExitCode -eq 0) {
-            Write-ColoredHost -Text "    Extraction complete to $DestinationPath" -ForegroundColor $script:colors.Green
-            return $true
-        }
-        Write-ErrorMessage -ErrorType "Extraction Failed" -Message "7-Zip failed for '$ArchivePath'. Exit Code: $($process.ExitCode)"
-        return $false
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = $cfg.SevenZipPath
+    $processInfo.Arguments = $arguments
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $processInfo
+    $process.Start() | Out-Null
+    Register-ChildProcess -Process $process
+    
+    # Poll for exit to allow Ctrl+C handling
+    while (-not $process.HasExited) {
+        $process.WaitForExit(500)
     }
-    catch {
-        Write-ErrorMessage -ErrorType "Process Error" -Message "Exception during 7-Zip execution: $($_.Exception.Message)"
-        throw # Re-throw to indicate critical failure
+
+    if ($process.ExitCode -eq 0) {
+        Write-SuccessMessage -Type 'Extracted' -Message "to $DestinationPath"
+        return $true
     }
+
+    $errorOutput = $process.StandardError.ReadToEnd()
+    Write-ErrorMessage -ErrorType 'Extraction Failed' -Message "7-Zip exit code: $($process.ExitCode)"
+    if ($errorOutput) {
+        Write-VerboseLog "7-Zip error: $errorOutput"
+    }
+    return $false
 }
 
-function Remove-DirectoryRecursive {
+function Format-FileSize {
+    <#
+    .SYNOPSIS
+        Formats a file size in bytes to a human-readable string.
+    #>
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Path
+    param(
+        [Parameter(Mandatory)]
+        [long]$Bytes
     )
-    if (Test-Path $Path) {
-        Write-ActionProgress -ActionName "Cleaning" -Details "Removing directory $Path"
-        try {
-            Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
-            Write-ColoredHost -Text "    Successfully removed $Path" -ForegroundColor $script:colors.Green
-        }
-        catch {
-            Write-WarningMessage -Type "Cleanup Warning" -Message "Failed to remove folder '$Path': $($_.Exception.Message)"
-        }
-    }
+
+    if ($Bytes -ge 1GB) { return '{0:N2} GB' -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return '{0:N2} MB' -f ($Bytes / 1MB) }
+    if ($Bytes -ge 1KB) { return '{0:N2} KB' -f ($Bytes / 1KB) }
+    return "$Bytes bytes"
 }
 
-function Ensure-Directory {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-    if (-not [string]::IsNullOrWhiteSpace($Path) -and -not (Test-Path $Path -PathType Container)) {
-        New-Item -Path $Path -ItemType Directory -Force | Out-Null
-    }
-}
+# ============================================================================
+# Test Mode Functions
+# ============================================================================
 
-function Build-InnoSetupInstaller {
+function New-TestFixtures {
+    <#
+    .SYNOPSIS
+        Creates test fixtures for test mode builds.
+    .DESCRIPTION
+        Generates a minimal directory structure with version info
+        and a dummy executable to allow testing the build pipeline
+        without downloading actual MinGW packages.
+    .PARAMETER Path
+        The base path where fixtures will be created.
+    .PARAMETER Architecture
+        The architecture (32 or 64).
+    .PARAMETER Date
+        The date string for version info.
+    #>
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$InstallerName,
-        [Parameter(Mandatory = $false)]
-        [string]$OutputName,
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
-        [Parameter(Mandatory = $true)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
         [string]$Architecture,
-        [Parameter(Mandatory = $true)]
-        [string]$SourceContentPath,
-        [Parameter(Mandatory = $true)]
-        [string]$InnoSetupExePath,
-        [Parameter(Mandatory = $true)]
-        [string]$OutputDirectory,
-        [Parameter(Mandatory = $true)]
-        [string]$InnoSetupScriptPath,
-        [Parameter(Mandatory = $true)]
-        [string]$SevenZipExePath, # Added for hash generation
-        [Parameter(Mandatory = $false)]
-        [bool]$GenerateLogsAlways = $false
+
+        [Parameter(Mandatory)]
+        [string]$Date
     )
 
-    # If OutputName is not provided, use InstallerName
-    if ([string]::IsNullOrEmpty($OutputName)) {
-        $OutputName = $InstallerName
+    Write-StatusInfo -Type 'Test Mode' -Message "Creating fixtures for $Architecture-bit"
+
+    # Create directory structure
+    if (-not (Test-Path $Path)) {
+        New-Item $Path -ItemType Directory -Force | Out-Null
     }
 
-    Write-ActionProgress -ActionName "Building Installer" -Details "$InstallerName $Version ($Architecture)"
-    $logFileName = "build_${InstallerName}_${Architecture}.log"
-    $logFilePath = Join-Path -Path $PSScriptRoot -ChildPath "..\$logFileName"
-
-    # Update the Build-InnoSetupInstaller function call in functions.ps1
-    $arguments = "/DMyAppName=`"$InstallerName`" /DMyOutputName=`"$OutputName`" /DMyAppVersion=`"$Version`" /DArch=`"$Architecture`" /DSourcePath=`"$SourceContentPath`" /DOutputPath=`"$OutputDirectory`""
-    
-    $stdOutFile = $null
-    $stdErrFile = $null
-    $installerBuiltSuccessfully = $false
-    $installerExeName = "$($OutputName).v$($Version).$($Architecture)-bit.exe"
-    $installerExeFullPath = Join-Path -Path $OutputDirectory -ChildPath $installerExeName
-
-    try {
-        if (-not (Test-Path $OutputDirectory)) {
-            New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
-        }
-
-        $stdOutFile = [System.IO.Path]::GetTempFileName()
-        $stdErrFile = [System.IO.Path]::GetTempFileName()
-
-        $process = Start-Process -FilePath $InnoSetupExePath -ArgumentList $InnoSetupScriptPath, $arguments `
-            -Wait -NoNewWindow -PassThru -RedirectStandardOutput $stdOutFile -RedirectStandardError $stdErrFile -ErrorAction Stop
-        
-        $exitCode = $process.ExitCode
-        $stdOutContent = Get-Content $stdOutFile -Raw -ErrorAction SilentlyContinue
-        $stdErrContent = Get-Content $stdErrFile -Raw -ErrorAction SilentlyContinue
-
-        if ($exitCode -ne 0 -or $GenerateLogsAlways) {
-            $logContent = "Timestamp: $(Get-Date -Format 'u')`nInno Setup Arguments: $arguments`n`nStandard Output:`n$stdOutContent`n`nStandard Error:`n$stdErrContent`nExit Code: $exitCode"
-            Set-Content -Path $logFilePath -Value $logContent -Encoding UTF8
-            if ($exitCode -ne 0) {
-                Write-ErrorMessage -ErrorType "Build Failed" -Message "$InstallerName ($Architecture) compilation failed." -LogFilePath $logFilePath -AssociatedExitCode $exitCode
-                return $false
-            }
-            Write-ColoredHost -Text "    Build Succeeded (Log generated): $InstallerName ($Architecture)" -ForegroundColor $script:colors.Green
-            Write-StatusInfo -Type "Log File" -Message $logFilePath
-            $installerBuiltSuccessfully = $true
-        } else {
-            Write-ColoredHost -Text "    Build Succeeded: $InstallerName ($Architecture)" -ForegroundColor $script:colors.Green
-            $installerBuiltSuccessfully = $true
-        }
-
-        # Generate hashes if installer was built successfully
-        if ($installerBuiltSuccessfully -and (Test-Path $installerExeFullPath -PathType Leaf)) {
-            Write-StatusInfo -Type "Hash Generation" -Message "Generating hashes for $installerExeName..."
-            $hashFileName = "$($OutputName).v$($Version).$($Architecture)-bit.hashes.txt"
-            $hashOutputFilePath = Join-Path -Path $OutputDirectory -ChildPath $hashFileName
-            $formatHashesScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "Format-7ZipHashes.ps1"
-
-            Write-StatusInfo -Type "Hash Script Path" -Message "Using hash script at $formatHashesScriptPath"
-
-            if (-not (Test-Path $formatHashesScriptPath -PathType Leaf)) {
-                Write-WarningMessage -Type "Hash Script Missing" -Message "Format-7ZipHashes.ps1 not found at '$formatHashesScriptPath'. Skipping hash generation."
-            } else {
-                try {
-                    # Call the Format-7ZipHashes.ps1 script and save output to hash file
-                    & $formatHashesScriptPath -FilePath $installerExeFullPath -SevenZipExePath $SevenZipExePath | Out-File -FilePath $hashOutputFilePath -Encoding utf8 -Force
-                    Write-StatusInfo -Type "Hash File" -Message "Hashes saved to $hashOutputFilePath"
-                } catch {
-                    Write-WarningMessage -Type "Hash Gen Error" -Message "Failed to generate or save hashes for $installerExeName : $($_.Exception.Message)"
-                }
-            }
-        } elseif ($installerBuiltSuccessfully) {
-            Write-WarningMessage -Type "Hash Skip" -Message "Installer EXE not found at '$installerExeFullPath'. Skipping hash generation."
-        }
-
-        return $installerBuiltSuccessfully
-    }
-    catch {
-        Write-ErrorMessage -ErrorType "InnoSetup Error" -Message "Exception during Inno Setup for $Architecture : $($_.Exception.Message)" -LogFilePath $logFilePath
-        return $false
-    }
-    finally {
-        if ($stdOutFile -and (Test-Path $stdOutFile)) { Remove-Item $stdOutFile -Force -ErrorAction SilentlyContinue }
-        if ($stdErrFile -and (Test-Path $stdErrFile)) { Remove-Item $stdErrFile -Force -ErrorAction SilentlyContinue }
-        Remove-DirectoryRecursive -Path $SourceContentPath
-    }
-}
-
-function Process-MingwCompilation {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Architecture, # e.g., "64" or "32"
-        [Parameter(Mandatory = $true)]
-        [string]$AssetPattern, # Regex pattern for the asset name
-        [Parameter(Mandatory = $true)]
-        [PSCustomObject]$WinLibsReleaseInfo, # Output from Find-GitHubRelease
-        [Parameter(Mandatory = $true)]
-        [PSCustomObject]$ReleaseMetadata,
-        [Parameter(Mandatory = $true)]
-        [string]$ReleaseNotesPath,
-        [Parameter(Mandatory = $false)] # Made false as it might not be available on first run
-        [string]$ProjectLatestTag, # Latest tag of easy-mingw-installer
-        [Parameter(Mandatory = $true)]
-        [string]$SevenZipExePath,
-        [Parameter(Mandatory = $true)]
-        [string]$InnoSetupExePath,
-        [Parameter(Mandatory = $true)]
-        [string]$FinalOutputPath, # e.g., "builds" directory
-        [Parameter(Mandatory = $true)]
-        [string]$TempDirectory, # Base temp directory
-        [Parameter(Mandatory = $true)]
-        [string]$InnoSetupScriptPath,
-        [Parameter(Mandatory = $false)]
-        [switch]$SkipIfVersionMatchesTag,
-        [Parameter(Mandatory = $false)]
-        [switch]$GenerateLogsAlways,
-        [Parameter(Mandatory = $false)]
-        [switch]$IsTestMode
-    )
-    Write-SeparatorLine
-    Write-StatusInfo -Type "Processing Arch" -Message "$($Architecture)-bit"
-
-    $selectedAsset = $null
-    if ($IsTestMode) {
-        $selectedAsset = @{ name = "mingw-w64-$Architecture-Test.7z"; browser_download_url = "file:///placeholder-for-test.7z" }
-        Write-StatusInfo -Type "Asset (Test Mode)" -Message $selectedAsset.name
-    } elseif ($WinLibsReleaseInfo) {
-        $selectedAsset = $WinLibsReleaseInfo.assets | Where-Object { $_.name -match $AssetPattern } | Select-Object -First 1
-        if ($selectedAsset) { Write-StatusInfo -Type "Asset Found" -Message $selectedAsset.name } 
-        else { Write-ErrorMessage -ErrorType "Asset Error" -Message "No asset found in release '$($WinLibsReleaseInfo.name)' matching pattern '$AssetPattern'."; return $false }
-    } else { Write-ErrorMessage -ErrorType "Configuration Error" -Message "WinLibs release information not provided and not in test mode."; return $false }
-
-    $releaseVersion = $ReleaseMetadata.Version
-    $winlibsPublishedDateForInfoFile = $ReleaseMetadata.PublishedDateForInfo
-    Write-StatusInfo -Type "New Release Tag" -Message $releaseVersion
-
-    # Create tag file for GitHub Actions - this will run per arch if build proceeds
-    # If multiple archs produce the same tag, it's just overwritten, which is fine.
-    if ($env:GITHUB_ACTIONS -eq "true") {
-        $repoRootPathForTag = (Get-Item $PSScriptRoot).Parent.FullName
-        $tagFileDir = Join-Path $repoRootPathForTag "tag"
-        if (-not (Test-Path $tagFileDir -PathType Container)) {
-            New-Item -Path $tagFileDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-        }
-        New-Item -Path (Join-Path $tagFileDir $releaseVersion) -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
-        Write-LogEntry -Type "GitHub Actions" -Message "Tag file for '$releaseVersion' created/updated in $tagFileDir."
+    $binDir = Join-Path $Path 'bin'
+    if (-not (Test-Path $binDir)) {
+        New-Item $binDir -ItemType Directory -Force | Out-Null
     }
 
-    $proceedWithBuild = $true
-    if ($SkipIfVersionMatchesTag.IsPresent -and -not $IsTestMode) { # Check .IsPresent for switches
-        if (-not $ProjectLatestTag) {
-            Write-WarningMessage -Type "Version Check" -Message "Project's latest tag not available. Proceeding with build."
-        } elseif ($ProjectLatestTag -eq $releaseVersion) {
-            Write-StatusInfo -Type "Version Check" -Message "Current release version $releaseVersion matches project tag. Skipping build for $Architecture-bit."
-            $proceedWithBuild = $false
-        } else {
-            Write-StatusInfo -Type "Version Check" -Message "New version $releaseVersion available (Project tag: $ProjectLatestTag)."
-        }
-    }
-    
-    $archTempDir = Join-Path -Path $TempDirectory -ChildPath "mingw$Architecture" 
-    $sourcePathForInstaller = Join-Path -Path $archTempDir -ChildPath "mingw$Architecture" # Initial assumption
-    $currentBuildInfoFilePath = Join-Path -Path $archTempDir -ChildPath "current_build_info.txt" # This is the input for Python
-    $releaseNotesBodyFinalPath = $ReleaseNotesPath
-
-    try {
-        if (Test-Path $archTempDir) { Remove-DirectoryRecursive -Path $archTempDir } 
-        Ensure-Directory -Path $archTempDir
-
-        if ($IsTestMode) {
-            Write-WarningMessage -Type "Test Mode" -Message "Skipping download and extraction for $Architecture-bit."
-            Ensure-Directory -Path $sourcePathForInstaller # Create dummy sourcePathForInstaller
-            $dummyInfoContent = @"
-winlibs personal build version gcc-TEST.0-mingw-w64ucrt-TEST.0-r0
-This is the winlibs Intel/AMD $Architecture-bit standalone build of:
+    # Create version info file
+    $versionContent = @"
+winlibs personal build version gcc-TEST-mingw-w64ucrt-TEST
 - GCC TEST.0
 - GDB TEST.0
 Thread model: POSIX
 Runtime library: UCRT (Test Mode)
-This build was compiled with GCC TEST.0 and packaged on $winlibsPublishedDateForInfoFile.
+Packaged on $Date
 "@
-            Set-Content -Path $currentBuildInfoFilePath -Value $dummyInfoContent -Encoding UTF8
-            Set-Content -Path (Join-Path $sourcePathForInstaller "version_info.txt") -Value "Test Mode - GCC for $Architecture-bit" # Dummy version_info.txt
-        } else {
-            $downloadedFilePath = Join-Path -Path $archTempDir -ChildPath $selectedAsset.name
-            if (-not (Invoke-DownloadFile -Url $selectedAsset.browser_download_url -DestinationFile $downloadedFilePath)) { throw "Download failed for $($selectedAsset.name)" }
-            if (-not (Start-SevenZipExtraction -ArchivePath $downloadedFilePath -DestinationPath $archTempDir -SevenZipExePath $SevenZipExePath)) { throw "Extraction failed for $($selectedAsset.name)" }
-            
-            # Auto-detect the actual extracted folder (e.g., mingw64, mingw32)
-            # $sourcePathForInstaller was an initial assumption, now we find the actual one
-            $extractedDirs = Get-ChildItem -Path $archTempDir -Directory | Where-Object {$_.Name -like "mingw*"}
-            if ($extractedDirs.Count -eq 1) {
-                $sourcePathForInstaller = $extractedDirs[0].FullName # Update to the actual extracted path
-                Write-StatusInfo -Type "Extraction Path" -Message "Actual source path for installer content: $sourcePathForInstaller"
-            } elseif ($extractedDirs.Count -gt 1) {
-                 Write-WarningMessage -Type "Extraction Ambiguity" -Message "Multiple mingw* directories found in $archTempDir. Using the first one: $($extractedDirs[0].FullName)"
-                 $sourcePathForInstaller = $extractedDirs[0].FullName
-            } else {
-                Write-ErrorMessage -ErrorType "Extraction Error" -Message "Could not determine extracted MinGW folder (e.g., mingw64) in $archTempDir."
-                throw "Extracted MinGW folder not found"
-            }
+    $versionPath = Join-Path $Path 'version_info.txt'
+    Set-Content -Path $versionPath -Value $versionContent -Encoding UTF8
 
+    # Create dummy executable (1KB) - use WriteAllBytes for PS5.1 compatibility
+    $dummyExe = Join-Path $binDir 'gcc.exe'
+    [byte[]]$dummyBytes = [byte[]]::new(1024)
+    [IO.File]::WriteAllBytes($dummyExe, $dummyBytes)
 
-            $winlibsInfoFileSource = Join-Path -Path $sourcePathForInstaller -ChildPath "version_info.txt" # Or "readme.txt", etc.
-            if (Test-Path $winlibsInfoFileSource -PathType Leaf) {
-                Write-StatusInfo -Type "Changelog Source" -Message "Using '$winlibsInfoFileSource' to create input for Python script."
-                $fileContent = Get-Content -Path $winlibsInfoFileSource -Raw -Encoding UTF8
-                if ($fileContent -notmatch "packaged on" -and $winlibsPublishedDateForInfoFile) {
-                    $fileContent += "`nThis build was compiled with GCC (Version from file) and packaged on $winlibsPublishedDateForInfoFile."
-                }
-                Set-Content -Path $currentBuildInfoFilePath -Value $fileContent -Encoding UTF8
-            } else {
-                Write-WarningMessage -Type "Changelog Source" -Message "Could not find '$winlibsInfoFileSource'. Using placeholder for '$currentBuildInfoFilePath'."
-                $placeholderInfoContent = @"
-winlibs personal build version gcc-15.1.0-mingw-w64ucrt-13.0.0-r2
+    Write-SuccessMessage -Type 'Fixtures' -Message "Created at $Path"
+}
 
-This is the winlibs Intel/AMD $Architecture-bit standalone build of:
-- GCC 15.1.0
-- GDB 16.3
-- MinGW-w64 13.0.0 (linked with ucrt)
-- GNU Binutils 2.44
-- GNU Make 4.4.1
-- PExports 0.47
-- dos2unix 7.5.2
-- Yasm 1.3.0
-- NASM 2.16.03
-- JWasm 2.12pre
-- ccache 4.11.3
-- CMake 4.0.2
-- ninja 1.12.1
-- Doxygen 1.14.0
-- pedeps 0.1.15
-- Universal Ctags 6.2.0
-- Cppcheck 2.17.0
-- Premake 5.0.0-beta6
+# ============================================================================
+# Changelog Functions
+# ============================================================================
 
-Thread model: posix
-Runtime library: UCRT (Windows 10 or higher, or when [Update for Universal C Runtime](https://support.microsoft.com/en-us/topic/update-for-universal-c-runtime-in-windows-c0514201-7fe6-95a3-b0a5-287930f3560c) is installed on older Windows versions, not supported on systems older than Windows 7 SP1 and Windows Server 2008 R2 SP1)
+function New-FallbackChangelog {
+    <#
+    .SYNOPSIS
+        Creates a fallback changelog when the Python generator isn't available.
+    .PARAMETER OutputPath
+        Path to write the changelog file.
+    .PARAMETER Version
+        The release version.
+    .PARAMETER VersionInfoPath
+        Optional path to version_info.txt for package info.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
 
-This build was compiled with GCC 15.1.0 and packaged on $winlibsPublishedDateForInfoFile.
+        [Parameter(Mandatory)]
+        [string]$Version,
 
-Please check out https://winlibs.com/ for the latest personal build.
+        [Parameter()]
+        [string]$VersionInfoPath
+    )
+
+    Write-WarningMessage -Type 'Changelog' -Message 'Using fallback template'
+
+    # Extract package info if available
+    $packageInfo = ''
+    if ($VersionInfoPath -and (Test-Path $VersionInfoPath)) {
+        $lines = Get-Content $VersionInfoPath | Where-Object { $_ -match '^- ' }
+        if ($lines) {
+            $packageInfo = "## Package Info`n$($lines -join "`n")`n`n"
+        }
+    }
+
+    $changelogContent = @"
+# Release $Version
+
+$packageInfo## Changelog
+* No automated changelog available
+
+### File Hash
 "@
-                Set-Content -Path $currentBuildInfoFilePath -Value $placeholderInfoContent -Encoding UTF8
-            }
+
+    Set-Content -Path $OutputPath -Value $changelogContent -Encoding UTF8
+    return $true
+}
+
+function Invoke-ChangelogGeneration {
+    <#
+    .SYNOPSIS
+        Generates a changelog using the Python script or fallback.
+    .PARAMETER VersionInfoPath
+        Path to the version_info.txt file. Optional if CurrentTag is provided.
+    .PARAMETER OutputPath
+        Path to write the changelog.
+    .PARAMETER Version
+        The current version.
+    .PARAMETER PreviousTag
+        The previous release tag for comparison.
+    .PARAMETER CurrentTag
+        If provided, fetch current package info from this GitHub release tag instead of local file.
+    .OUTPUTS
+        $true on success, $false on failure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [string]$VersionInfoPath,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter(Mandatory)]
+        [string]$Version,
+
+        [Parameter()]
+        [string]$PreviousTag,
+
+        [Parameter()]
+        [string]$CurrentTag
+    )
+
+    # Skip if already exists
+    if (Test-Path $OutputPath) {
+        Write-StatusInfo -Type 'Changelog' -Message 'Already exists, skipping'
+        return $true
+    }
+
+    # Fallback if no version info and no CurrentTag
+    if (-not $CurrentTag -and -not (Test-Path $VersionInfoPath)) {
+        return New-FallbackChangelog -OutputPath $OutputPath -Version $Version
+    }
+
+    # Try Python script
+    $pyScript = Join-Path $PSScriptRoot 'generate_changelog.py'
+    if (-not (Test-Path $pyScript)) {
+        return New-FallbackChangelog -OutputPath $OutputPath -Version $Version -VersionInfoPath $VersionInfoPath
+    }
+
+    try {
+        # Check if Python is available
+        $null = & python --version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Python not available'
         }
 
-        if ($proceedWithBuild) {
-            # Conditional Changelog Generation
-            if (-not $script:ReleaseNotesGenerated -and -not (Test-Path $releaseNotesBodyFinalPath)) {
-                if (Test-Path $currentBuildInfoFilePath) {
-                    Write-StatusInfo -Type "Changelog Generation" -Message "Attempting to generate release notes body..."
-                    $pythonPath = "python" 
-                    $pythonScriptItself = Join-Path -Path $PSScriptRoot -ChildPath "generate_changelog.py" 
-                    $effectivePrevTag = if ([string]::IsNullOrEmpty($ProjectLatestTag)) { "HEAD" } else { $ProjectLatestTag }
+        $cfg = Get-BuildConfig
 
-                    $pythonScriptArgs = @(
-                        "--input-file", """$currentBuildInfoFilePath""" # Use the prepared file
-                        "--output-file", """$releaseNotesBodyFinalPath"""
-                        "--prev-tag", """$effectivePrevTag"""
-                        "--current-build-tag", """$releaseVersion"""
-                        "--github-owner", "ehsan18t"
-                        "--github-repo", "easy-mingw-installer"
-                    )
-                    $fullArgumentList = @($pythonScriptItself) + $pythonScriptArgs
-                    Write-LogEntry -Type "Python Call" -Message "$pythonPath $($fullArgumentList -join ' ')"
-                    
-                    $processInfo = Start-Process -FilePath $pythonPath -ArgumentList $fullArgumentList -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
-                    
-                    if ($processInfo.ExitCode -ne 0) {
-                        Write-WarningMessage -Type "Changelog Gen Failed" -Message "Python script exited with code $($processInfo.ExitCode). Check Python script output."
-                    } elseif (Test-Path $releaseNotesBodyFinalPath) {
-                        Write-SuccessMessage -Type "Changelog Generated" -Message "Release notes body created at $releaseNotesBodyFinalPath"
-                        $script:ReleaseNotesGenerated = $true
-                    } else {
-                        Write-WarningMessage -Type "Changelog Gen Issue" -Message "Python script ran but output file $releaseNotesBodyFinalPath not found."
-                    }
-                } else {
-                    Write-WarningMessage -Type "Changelog Skip" -Message "Input file '$currentBuildInfoFilePath' for Python script not found. Skipping changelog generation."
-                }
-            } else {
-                Write-StatusInfo -Type "Changelog Skip" -Message "Release notes body '$releaseNotesBodyFinalPath' already exists. Skipping generation."
-            }
-            
-            return Build-InnoSetupInstaller -InstallerName "EasyMinGW Installer" `
-                                     -OutputName "EasyMinGW.Installer" `
-                                     -Version $releaseVersion `
-                                     -Architecture $Architecture `
-                                     -SourceContentPath $sourcePathForInstaller `
-                                     -InnoSetupExePath $InnoSetupExePath `
-                                     -OutputDirectory $FinalOutputPath `
-                                     -InnoSetupScriptPath $InnoSetupScriptPath `
-                                     -SevenZipExePath $SevenZipExePath `
-                                     -GenerateLogsAlways:$GenerateLogsAlways
-        } else {
-            Write-StatusInfo -Type "Build Skipped" -Message "Skipping InnoSetup build for $Architecture-bit."
-            return $true 
+        $pyArgs = @(
+            $pyScript
+            '--output-file', $OutputPath
+            '--current-build-tag', $Version
+            '--github-owner', $cfg.ProjectOwner
+            '--github-repo', $cfg.ProjectRepo
+        )
+        
+        # Only add prev-tag if we have a valid one (not empty/null)
+        if ($PreviousTag) {
+            $pyArgs += '--prev-tag', $PreviousTag
+        }
+
+        # Use CurrentTag to fetch from GitHub, otherwise use local file
+        if ($CurrentTag) {
+            $pyArgs += '--current-tag', $CurrentTag
+            Write-VerboseLog "Fetching current package info from GitHub tag: $CurrentTag"
+        }
+        else {
+            $pyArgs += '--input-file', $VersionInfoPath
+        }
+
+        # Start Python process with tracking for cancellation
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = 'python'
+        $processInfo.Arguments = ($pyArgs | ForEach-Object { 
+            if ($_ -match '\s') { "`"$_`"" } else { $_ } 
+        }) -join ' '
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $true
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
+        $process.Start() | Out-Null
+        Register-ChildProcess -Process $process
+        
+        # Poll for exit to allow Ctrl+C handling
+        while (-not $process.HasExited) {
+            $process.WaitForExit(500)
+        }
+
+        if ($process.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
+            Write-SuccessMessage -Type 'Changelog' -Message 'Generated successfully'
+            return $true
         }
     }
     catch {
-        Write-ErrorMessage -ErrorType "Compilation Failed" -Message "Error processing $Architecture-bit MinGW: $($_.Exception.Message)"
-        return $false
+        Write-VerboseLog "Python changelog generation failed: $($_.Exception.Message)"
+    }
+
+    # Fall back if Python failed
+    return New-FallbackChangelog -OutputPath $OutputPath -Version $Version -VersionInfoPath $VersionInfoPath
+}
+
+# ============================================================================
+# Build Functions
+# ============================================================================
+
+function Invoke-InstallerBuild {
+    <#
+    .SYNOPSIS
+        Builds the installer using Inno Setup.
+    .PARAMETER Name
+        The installer display name.
+    .PARAMETER OutputName
+        The base output filename.
+    .PARAMETER Version
+        The version string.
+    .PARAMETER Architecture
+        The architecture (32 or 64).
+    .PARAMETER SourcePath
+        Path to the MinGW source files.
+    .PARAMETER OutputDirectory
+        Directory for the built installer.
+    .PARAMETER IssPath
+        Path to the Inno Setup script.
+    .OUTPUTS
+        $true on success, $false on failure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [string]$OutputName,
+
+        [Parameter(Mandatory)]
+        [string]$Version,
+
+        [Parameter(Mandatory)]
+        [string]$Architecture,
+
+        [Parameter(Mandatory)]
+        [string]$SourcePath,
+
+        [Parameter(Mandatory)]
+        [string]$OutputDirectory,
+
+        [Parameter(Mandatory)]
+        [string]$IssPath
+    )
+
+    $cfg = Get-BuildConfig
+
+    Write-StatusInfo -Type 'Building' -Message "$Name v$Version ($Architecture-bit)"
+
+    # Ensure output directory exists
+    if (-not (Test-Path $OutputDirectory)) {
+        New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
+    }
+
+    # Build Inno Setup arguments
+    $arguments = @(
+        "/DMyAppName=`"$Name`""
+        "/DMyOutputName=`"$OutputName`""
+        "/DMyAppVersion=`"$Version`""
+        "/DArch=`"$Architecture`""
+        "/DSourcePath=`"$SourcePath`""
+        "/DOutputPath=`"$OutputDirectory`""
+        "`"$IssPath`""
+    ) -join ' '
+
+    # Run Inno Setup with output redirected (suppress verbose logging)
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = $cfg.InnoSetupPath
+    $processInfo.Arguments = $arguments
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $processInfo
+    $process.Start() | Out-Null
+    Register-ChildProcess -Process $process
+    
+    # Read output asynchronously to prevent deadlock
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    
+    # Poll for exit to allow Ctrl+C handling
+    while (-not $process.HasExited) {
+        $process.WaitForExit(500)
+    }
+
+    $standardOutput = $stdout.Result
+    $errorOutput = $stderr.Result
+
+    # Determine if we should write log file
+    $shouldWriteLog = $cfg.GenerateLogsAlways -or ($process.ExitCode -ne 0)
+    
+    if ($shouldWriteLog) {
+        $logFileName = "build_${OutputName}_${Architecture}.log"
+        $logPath = Join-Path $OutputDirectory $logFileName
+        
+        $logContent = @"
+================================================================================
+Inno Setup Build Log
+================================================================================
+Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Exit Code: $($process.ExitCode)
+Name: $Name
+Version: $Version
+Architecture: $Architecture-bit
+Source: $SourcePath
+Output: $OutputDirectory
+================================================================================
+
+=== Standard Output ===
+$standardOutput
+
+=== Standard Error ===
+$errorOutput
+"@
+        $logContent | Out-File -FilePath $logPath -Encoding UTF8
+        Write-VerboseLog "Build log saved: $logFileName"
+    }
+
+    if ($process.ExitCode -eq 0) {
+        $outputFile = "$OutputName.v$Version.$Architecture-bit.exe"
+        Write-SuccessMessage -Type 'Built' -Message $outputFile
+
+        # Generate hashes for the built installer (unless skipped)
+        if (-not $cfg.SkipHashes) {
+            $exePath = Join-Path $OutputDirectory $outputFile
+            if (Test-Path $exePath) {
+                Invoke-HashGeneration -FilePath $exePath -OutputDirectory $OutputDirectory `
+                    -BaseName $OutputName -Version $Version -Architecture $Architecture
+            }
+        }
+
+        return $true
+    }
+
+    # Build failed - show error details
+    Write-ErrorMessage -ErrorType 'Build Failed' -Message "Inno Setup exit code: $($process.ExitCode)"
+    if ($errorOutput) {
+        Write-VerboseLog "Inno Setup error: $errorOutput"
+    }
+    return $false
+}
+
+function Invoke-HashGeneration {
+    <#
+    .SYNOPSIS
+        Generates SHA256 and MD5 hashes for a built installer.
+    .PARAMETER FilePath
+        Path to the file to hash.
+    .PARAMETER OutputDirectory
+        Directory to write the hash file.
+    .PARAMETER BaseName
+        Base name for the hash file.
+    .PARAMETER Version
+        Version string.
+    .PARAMETER Architecture
+        Architecture string.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory)]
+        [string]$OutputDirectory,
+
+        [Parameter(Mandatory)]
+        [string]$BaseName,
+
+        [Parameter(Mandatory)]
+        [string]$Version,
+
+        [Parameter(Mandatory)]
+        [string]$Architecture
+    )
+
+    $cfg = Get-BuildConfig
+    $hashScript = Join-Path $PSScriptRoot 'Format-7ZipHashes.ps1'
+
+    if (-not (Test-Path $hashScript)) {
+        Write-WarningMessage -Type 'Hashes' -Message 'Hash script not found, skipping'
+        return
+    }
+
+    try {
+        $hashFile = Join-Path $OutputDirectory "$BaseName.v$Version.$Architecture-bit.hashes.txt"
+
+        & $hashScript -FilePath $FilePath -SevenZipExePath $cfg.SevenZipPath |
+            Out-File $hashFile -Encoding utf8
+
+        Write-SuccessMessage -Type 'Hashes' -Message (Split-Path $hashFile -Leaf)
+    }
+    catch {
+        Write-WarningMessage -Type 'Hashes' -Message "Generation failed: $($_.Exception.Message)"
     }
 }
 
-function Get-ReleaseMetadata {
+# ============================================================================
+# Main Build Pipeline
+# ============================================================================
+
+function Invoke-ArchitectureBuild {
+    <#
+    .SYNOPSIS
+        Builds a single architecture variant.
+    .DESCRIPTION
+        Handles the complete build process for one architecture:
+        download/extract (or test fixtures), changelog, and installer build.
+    .PARAMETER Architecture
+        The architecture to build (32 or 64).
+    .PARAMETER AssetPattern
+        Regex pattern to match the download asset.
+    .PARAMETER Release
+        The GitHub release object.
+    .PARAMETER Version
+        The version string.
+    .PARAMETER Date
+        The release date string.
+    .PARAMETER PreviousTag
+        The previous release tag for changelog.
+    .PARAMETER CurrentTag
+        If provided, fetch current package info from this GitHub release for changelog.
+    .PARAMETER OutputDirectory
+        Directory for build outputs.
+    .PARAMETER TempDirectory
+        Temporary working directory.
+    .PARAMETER IssPath
+        Path to Inno Setup script.
+    .PARAMETER ReleaseNotesPath
+        Path to write release notes.
+    .OUTPUTS
+        $true on success, $false on failure.
+    #>
     [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param (
-        [Parameter(Mandatory = $false)]
-        [PSCustomObject]$ReleaseInfo,
-        [Parameter(Mandatory = $false)]
-        [switch]$IsTestMode
+    param(
+        [Parameter(Mandatory)]
+        [string]$Architecture,
+
+        [Parameter(Mandatory)]
+        [string]$AssetPattern,
+
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Release,
+
+        [Parameter(Mandatory)]
+        [string]$Version,
+
+        [Parameter(Mandatory)]
+        [string]$Date,
+
+        [Parameter()]
+        [string]$PreviousTag,
+
+        [Parameter()]
+        [string]$CurrentTag,
+
+        [Parameter(Mandatory)]
+        [string]$OutputDirectory,
+
+        [Parameter(Mandatory)]
+        [string]$TempDirectory,
+
+        [Parameter(Mandatory)]
+        [string]$IssPath,
+
+        [Parameter(Mandatory)]
+        [string]$ReleaseNotesPath
     )
 
-    if ($IsTestMode) {
-        $now = Get-Date
-        return [PSCustomObject]@{
-            Release              = $ReleaseInfo
-            Version              = "2030.10.10"
-            PublishedDate        = $now
-            PublishedDateDisplay = $now.ToString("dd-MMM-yyyy HH:mm:ss")
-            PublishedDateForInfo = $now.ToString("yyyy-MM-dd")
+    $cfg = Get-BuildConfig
+
+    Write-SeparatorLine -Character '=' -Length 50
+    Write-StatusInfo -Type 'Architecture' -Message "$Architecture-bit"
+
+    # Find matching asset
+    $asset = $null
+    if ($cfg.IsTestMode -and -not $cfg.ValidateAssets) {
+        # Pure test mode: use mock asset
+        $asset = @{
+            name                  = "mingw-test-$Architecture.7z"
+            browser_download_url  = 'test://fake.7z'
+        }
+        Write-StatusInfo -Type 'Asset' -Message "$($asset.name) (test mode)"
+    }
+    else {
+        # Find real asset from release
+        $asset = $Release.assets | Where-Object { $_.name -match $AssetPattern } | Select-Object -First 1
+        if (-not $asset) {
+            Write-ErrorMessage -ErrorType 'Asset Not Found' -Message "No match for pattern: $AssetPattern"
+            return $false
+        }
+        Write-StatusInfo -Type 'Asset' -Message $asset.name
+        
+        # If in test mode with ValidateAssets, just validate and continue with test fixtures
+        if ($cfg.IsTestMode -and $cfg.ValidateAssets) {
+            Write-SuccessMessage -Type 'Validated' -Message "Asset exists: $($asset.name)"
         }
     }
 
-    if (-not $ReleaseInfo) {
-        throw "Release information is required when not in test mode."
+    # Set up working directories
+    $archTempDir = Join-Path $TempDirectory "mingw$Architecture"
+    $sourcePath = Join-Path $archTempDir "mingw$Architecture"
+    $buildInfoPath = Join-Path $archTempDir 'build_info.txt'
+
+    # Clean and create temp directory
+    if (Test-Path $archTempDir) {
+        Remove-Item $archTempDir -Recurse -Force
+    }
+    New-Item $archTempDir -ItemType Directory -Force | Out-Null
+
+    try {
+        # ========================
+        # Download/Extract or Test Fixtures
+        # ========================
+        if ($cfg.IsTestMode -or $cfg.SkipDownload) {
+            # Test mode: create fixtures
+            New-TestFixtures -Path $sourcePath -Architecture $Architecture -Date $Date
+
+            $versionInfo = Join-Path $sourcePath 'version_info.txt'
+            if (Test-Path $versionInfo) {
+                Copy-Item $versionInfo $buildInfoPath
+            }
+        }
+        else {
+            # Normal mode: download and extract
+            $archiveFile = Join-Path $archTempDir $asset.name
+
+            if (-not (Invoke-FileDownload -Url $asset.browser_download_url -Destination $archiveFile)) {
+                return $false
+            }
+
+            if (-not (Expand-7ZipArchive -ArchivePath $archiveFile -DestinationPath $archTempDir)) {
+                return $false
+            }
+
+            # Find the extracted mingw folder
+            $extracted = Get-ChildItem $archTempDir -Directory |
+                Where-Object { $_.Name -like 'mingw*' } |
+                Select-Object -First 1
+
+            if ($extracted) {
+                $sourcePath = $extracted.FullName
+
+                # Copy version info for changelog
+                $versionInfo = Join-Path $sourcePath 'version_info.txt'
+                if (Test-Path $versionInfo) {
+                    Copy-Item $versionInfo $buildInfoPath
+                }
+            }
+        }
+
+        # ========================
+        # Changelog Generation
+        # ========================
+        if (-not $cfg.SkipChangelog) {
+            $changelogParams = @{
+                OutputPath  = $ReleaseNotesPath
+                Version     = $Version
+                PreviousTag = $PreviousTag
+            }
+            
+            # In test mode with GenerateChangelog, fetch from GitHub instead of local file
+            if ($CurrentTag) {
+                $changelogParams['CurrentTag'] = $CurrentTag
+            }
+            else {
+                $changelogParams['VersionInfoPath'] = $buildInfoPath
+            }
+            
+            $null = Invoke-ChangelogGeneration @changelogParams
+        }
+
+        # ========================
+        # Installer Build
+        # ========================
+        if (-not $cfg.SkipBuild) {
+            return Invoke-InstallerBuild `
+                -Name $cfg.InstallerName `
+                -OutputName $cfg.InstallerBaseName `
+                -Version $Version `
+                -Architecture $Architecture `
+                -SourcePath $sourcePath `
+                -OutputDirectory $OutputDirectory `
+                -IssPath $IssPath
+        }
+
+        return $true
+    }
+    finally {
+        # Cleanup temp directory (skip in test mode for inspection)
+        if (-not $cfg.IsTestMode -and (Test-Path $archTempDir)) {
+            Write-VerboseLog "Cleaning up: $archTempDir"
+            Remove-Item $archTempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Add-HashesToChangelog {
+    <#
+    .SYNOPSIS
+        Appends hash file contents to the changelog.
+    .PARAMETER ChangelogPath
+        Path to the changelog file.
+    .PARAMETER OutputDirectory
+        Directory containing hash files.
+    .PARAMETER Version
+        The version string.
+    .PARAMETER Architectures
+        Array of architectures to add hashes for.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ChangelogPath,
+
+        [Parameter(Mandatory)]
+        [string]$OutputDirectory,
+
+        [Parameter(Mandatory)]
+        [string]$Version,
+
+        [Parameter(Mandatory)]
+        [string[]]$Architectures
+    )
+
+    if (-not (Test-Path $ChangelogPath)) {
+        Write-WarningMessage -Type 'Hash Append' -Message 'Changelog not found, skipping'
+        return
     }
 
-    $published = Get-Date -Date $ReleaseInfo.published_at
-    return [PSCustomObject]@{
-        Release              = $ReleaseInfo
-        Version              = ConvertTo-VersionStringFromDate -DateString $ReleaseInfo.published_at -FormatType Version
-        PublishedDate        = $published
-        PublishedDateDisplay = ConvertTo-VersionStringFromDate -DateString $ReleaseInfo.published_at -FormatType Display
-        PublishedDateForInfo = $published.ToString("yyyy-MM-dd")
+    $cfg = Get-BuildConfig
+    $content = Get-Content $ChangelogPath -Raw
+
+    foreach ($arch in $Architectures) {
+        $hashFileName = "$($cfg.InstallerBaseName).v$Version.$arch-bit.hashes.txt"
+        $hashFilePath = Join-Path $OutputDirectory $hashFileName
+
+        if (-not (Test-Path $hashFilePath)) {
+            Write-VerboseLog "Hash file not found: $hashFileName"
+            continue
+        }
+
+        # Check if already appended
+        $archHeader = "**$arch-bit**"
+        if ($content -match [regex]::Escape($archHeader)) {
+            Write-VerboseLog "Hash block already exists for $arch-bit"
+            continue
+        }
+
+        # Append hash block
+        $hashContent = (Get-Content $hashFilePath -Raw).TrimEnd()
+        $codeBlockStart = '```text'
+        $codeBlockEnd = '```'
+        $hashBlock = "`n`n$archHeader`n$codeBlockStart`n$hashContent`n$codeBlockEnd"
+
+        Add-Content -Path $ChangelogPath -Value $hashBlock -Encoding UTF8
+        $content = Get-Content $ChangelogPath -Raw
+
+        Write-StatusInfo -Type 'Hash Append' -Message "$arch-bit hashes added to changelog"
     }
 }
