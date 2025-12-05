@@ -48,6 +48,18 @@ param(
     # Test mode: uses mock data and test fixtures instead of downloads
     [switch]$TestMode,
 
+    # Validate that release assets exist (makes API calls, but doesn't download)
+    [switch]$ValidateAssets,
+
+    # Generate changelog in test mode (fetches real release for changelog generation)
+    [switch]$GenerateChangelog,
+
+    # Offline mode: skip all network requests
+    [switch]$OfflineMode,
+
+    # Clean temp directory before starting
+    [switch]$CleanFirst,
+
     # Check if a new release is available before building
     [switch]$CheckNewRelease,
 
@@ -63,6 +75,9 @@ param(
 
     # Skip generating the changelog
     [switch]$SkipChangelog,
+
+    # Skip generating file hashes (also skips appending hashes to changelog)
+    [switch]$SkipHashes,
 
     # Always generate Inno Setup build logs (not just on errors)
     [switch]$GenerateLogsAlways
@@ -100,6 +115,27 @@ $configOverrides = @{}
 if ($TestMode) {
     $configOverrides['IsTestMode'] = $true
 }
+if ($PSBoundParameters.ContainsKey('ValidateAssets')) {
+    $configOverrides['ValidateAssets'] = $ValidateAssets.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('GenerateChangelog')) {
+    $configOverrides['GenerateChangelog'] = $GenerateChangelog.IsPresent
+    # GenerateChangelog implies we don't skip changelog
+    if ($GenerateChangelog.IsPresent) {
+        $configOverrides['SkipChangelog'] = $false
+    }
+}
+if ($PSBoundParameters.ContainsKey('OfflineMode')) {
+    $configOverrides['OfflineMode'] = $OfflineMode.IsPresent
+    # Offline mode implies skip download and skip changelog
+    if ($OfflineMode.IsPresent) {
+        $configOverrides['SkipDownload'] = $true
+        $configOverrides['SkipChangelog'] = $true
+    }
+}
+if ($PSBoundParameters.ContainsKey('CleanFirst')) {
+    $configOverrides['CleanFirst'] = $CleanFirst.IsPresent
+}
 if ($PSBoundParameters.ContainsKey('SkipDownload')) {
     $configOverrides['SkipDownload'] = $SkipDownload.IsPresent
 }
@@ -108,6 +144,9 @@ if ($PSBoundParameters.ContainsKey('SkipBuild')) {
 }
 if ($PSBoundParameters.ContainsKey('SkipChangelog')) {
     $configOverrides['SkipChangelog'] = $SkipChangelog.IsPresent
+}
+if ($PSBoundParameters.ContainsKey('SkipHashes')) {
+    $configOverrides['SkipHashes'] = $SkipHashes.IsPresent
 }
 if ($PSBoundParameters.ContainsKey('GenerateLogsAlways')) {
     $configOverrides['GenerateLogsAlways'] = $GenerateLogsAlways.IsPresent
@@ -124,6 +163,15 @@ Initialize-BuildConfig -Overrides $configOverrides
 $cfg = Get-BuildConfig
 
 # ============================================================================
+# Clean First (if requested)
+# ============================================================================
+
+if ($cfg.CleanFirst -and (Test-Path $cfg.TempDirectory)) {
+    Write-Host "`n[Clean] Removing temp directory: $($cfg.TempDirectory)" -ForegroundColor Yellow
+    Remove-Item -Path $cfg.TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ============================================================================
 # Build Header & Info Display
 # ============================================================================
 
@@ -136,6 +184,16 @@ $releaseNotesPath = Join-Path $PSScriptRoot 'release_notes_body.md'
 
 # Display build configuration
 Write-BuildInfo -Config $cfg -Architectures $Archs -OutputPath $outputDir
+
+# Verbose logging of paths and directories
+if ($cfg.LogLevel -eq 'Verbose') {
+    Write-SeparatorLine -Character '-' -Length 50
+    Write-LogEntry -Type '7-Zip Path' -Message $cfg.SevenZipPath
+    Write-LogEntry -Type 'InnoSetup Path' -Message $cfg.InnoSetupPath
+    Write-LogEntry -Type 'Temp Directory' -Message $cfg.TempDirectory
+    Write-LogEntry -Type 'Output Directory' -Message $outputDir
+    Write-SeparatorLine -Character '-' -Length 50
+}
 
 # ============================================================================
 # Dependency Validation
@@ -181,12 +239,54 @@ try {
     $release = $null
 
     if ($cfg.IsTestMode) {
-        # Test mode: use mock data
+        # Test mode: use mock data by default
         $version = $cfg.TestModeVersion
         $previousTag = $version
         $release = @{ name = 'Test Release'; assets = @() }
         
-        Write-StatusInfo -Type 'Version' -Message "$version (test mode)"
+        # If ValidateAssets or GenerateChangelog is set, fetch real release data
+        if ($cfg.ValidateAssets -or $cfg.GenerateChangelog) {
+            Write-StatusInfo -Type 'Test Mode' -Message 'Fetching real release for validation/changelog...'
+            
+            $realRelease = Find-GitHubRelease -Owner $cfg.WinLibsOwner -Repo $cfg.WinLibsRepo -TitlePattern $TitlePattern
+            if ($realRelease) {
+                $release = $realRelease
+                Write-StatusInfo -Type 'Real Release' -Message $realRelease.name
+            }
+            else {
+                Write-WarningMessage -Type 'Validation' -Message "No release matches pattern: $TitlePattern"
+            }
+            
+            # Get last 2 tags for changelog generation (compare between our releases)
+            if ($cfg.GenerateChangelog) {
+                $recentTags = Get-GitHubTags -Owner $cfg.ProjectOwner -Repo $cfg.ProjectRepo -Count 2
+                if ($recentTags.Count -ge 2) {
+                    # Use latest tag as version, second-to-last as previous
+                    $version = $recentTags[0]
+                    $previousTag = $recentTags[1]
+                    Write-StatusInfo -Type 'Current Tag' -Message $version
+                    Write-StatusInfo -Type 'Previous Tag' -Message $previousTag
+                }
+                elseif ($recentTags.Count -eq 1) {
+                    $version = $recentTags[0]
+                    $previousTag = $null
+                    Write-StatusInfo -Type 'Current Tag' -Message $version
+                    Write-WarningMessage -Type 'Changelog' -Message 'No previous tag found for comparison'
+                }
+                else {
+                    Write-WarningMessage -Type 'Changelog' -Message 'No tags found - using test version'
+                }
+            }
+            elseif ($realRelease) {
+                # Just validating assets - use release date as version
+                $publishedDate = [datetime]$realRelease.published_at
+                $version = $publishedDate.ToString('yyyy.MM.dd')
+                $releaseDate = $publishedDate.ToString('yyyy-MM-dd')
+            }
+        }
+        else {
+            Write-StatusInfo -Type 'Version' -Message "$version (test mode)"
+        }
     }
     else {
         # Get project's latest tag for comparison
@@ -226,6 +326,12 @@ try {
         # Build Each Architecture
         # ========================
         $buildSuccess = $true
+        
+        # In test mode with GenerateChangelog, pass current tag to fetch from GitHub
+        $currentTagForChangelog = $null
+        if ($cfg.IsTestMode -and $cfg.GenerateChangelog) {
+            $currentTagForChangelog = $version
+        }
 
         for ($i = 0; $i -lt $Archs.Count; $i++) {
             $arch = $Archs[$i]
@@ -238,6 +344,7 @@ try {
                 -Version $version `
                 -Date $releaseDate `
                 -PreviousTag $previousTag `
+                -CurrentTag $currentTagForChangelog `
                 -OutputDirectory $outputDir `
                 -TempDirectory $cfg.TempDirectory `
                 -IssPath $issPath `
@@ -252,7 +359,7 @@ try {
         # ========================
         # Post-Build: Append Hashes to Changelog
         # ========================
-        if ($buildSuccess -and -not $cfg.SkipBuild) {
+        if ($buildSuccess -and -not $cfg.SkipBuild -and -not $cfg.SkipHashes) {
             if (Test-Path $releaseNotesPath) {
                 Write-SeparatorLine
                 Add-HashesToChangelog `

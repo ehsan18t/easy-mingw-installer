@@ -7,7 +7,7 @@ TITLE Easy MinGW Installer Builder
 @REM ============================================================================
 
 @REM Build mode: Set to 1 to only build if there's a new release
-SET "buildOnlyIfNewRelease=1"
+SET "buildOnlyIfNewRelease=0"
 
 @REM Logging: Set to 1 to always generate build logs (not just on errors)
 SET "generateLogsAlways=0"
@@ -15,10 +15,23 @@ SET "generateLogsAlways=0"
 @REM Test mode: Set to 1 to run in test mode (no downloads, uses fixtures)
 SET "testMode=1"
 
+@REM Test mode flags:
+@REM   validateAssets - Verify release assets exist via API (no download)
+@REM   generateChangelog - Generate real changelog from last release
+SET "validateAssets=1"
+SET "generateChangelog=1"
+
+@REM Offline mode: Set to 1 to skip all network requests (use existing files)
+SET "offlineMode=0"
+
+@REM Clean first: Set to 1 to clean temp directory before starting
+SET "cleanFirst=1"
+
 @REM Skip flags (advanced): Override individual steps
 @REM SET "skipDownload=0"
 @REM SET "skipBuild=0"
 @REM SET "skipChangelog=0"
+@REM SET "skipHashes=0"
 
 @REM ============================================================================
 @REM BUILD PARAMETERS - Change these to target different GCC versions
@@ -78,11 +91,16 @@ IF DEFINED SevenZip ( SET PowerShellCmd=%PowerShellCmd% -SevenZipPath "%SevenZip
 IF "%buildOnlyIfNewRelease%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -CheckNewRelease )
 IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -GenerateLogsAlways )
 IF "%testMode%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -TestMode )
+IF "%validateAssets%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -ValidateAssets )
+IF "%generateChangelog%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -GenerateChangelog )
+IF "%offlineMode%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -OfflineMode )
+IF "%cleanFirst%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -CleanFirst )
 
 @REM Advanced skip flags (uncomment to use)
 @REM IF "%skipDownload%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipDownload )
 @REM IF "%skipBuild%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipBuild )
 @REM IF "%skipChangelog%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipChangelog )
+@REM IF "%skipHashes%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipHashes )
 
 @REM ============================================================================
 @REM RUN BUILD

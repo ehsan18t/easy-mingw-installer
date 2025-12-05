@@ -185,6 +185,7 @@ function Get-BuildConfig {
         # ========================
         DownloadRetries   = 3
         DownloadRetryDelaySeconds = 10
+        DownloadBufferSize = 80KB  # Buffer size for download progress updates
 
         # ========================
         # Logging
@@ -198,9 +199,14 @@ function Get-BuildConfig {
         # These are set during initialization based on parameters/environment
         IsGitHubActions   = $env:GITHUB_ACTIONS -eq 'true'
         IsTestMode        = $false
+        ValidateAssets    = $false
+        GenerateChangelog = $false
+        OfflineMode       = $false
+        CleanFirst        = $false
         SkipDownload      = $false
         SkipBuild         = $false
         SkipChangelog     = $false
+        SkipHashes        = $false
         GenerateLogsAlways = $false
     }
 
@@ -250,9 +256,27 @@ function Initialize-BuildConfig {
     if ($Overrides.ContainsKey('IsTestMode')) {
         $cfg.IsTestMode = [bool]$Overrides.IsTestMode
     }
+    if ($Overrides.ContainsKey('OfflineMode')) {
+        $cfg.OfflineMode = [bool]$Overrides.OfflineMode
+    }
+    if ($Overrides.ContainsKey('CleanFirst')) {
+        $cfg.CleanFirst = [bool]$Overrides.CleanFirst
+    }
+    if ($Overrides.ContainsKey('ValidateAssets')) {
+        $cfg.ValidateAssets = [bool]$Overrides.ValidateAssets
+    }
+    if ($Overrides.ContainsKey('GenerateChangelog')) {
+        $cfg.GenerateChangelog = [bool]$Overrides.GenerateChangelog
+    }
 
-    # Test mode implies certain skip flags
+    # Test mode implies skip download and changelog (but NOT build)
     if ($cfg.IsTestMode) {
+        $cfg.SkipDownload = $true
+        $cfg.SkipChangelog = $true
+    }
+
+    # Offline mode implies skip download and changelog (handled in Builder.ps1, but also enforce here)
+    if ($cfg.OfflineMode) {
         $cfg.SkipDownload = $true
         $cfg.SkipChangelog = $true
     }
@@ -267,6 +291,15 @@ function Initialize-BuildConfig {
     if ($Overrides.ContainsKey('SkipChangelog')) {
         $cfg.SkipChangelog = [bool]$Overrides.SkipChangelog
     }
+    if ($Overrides.ContainsKey('SkipHashes')) {
+        $cfg.SkipHashes = [bool]$Overrides.SkipHashes
+    }
+    
+    # GenerateChangelog overrides SkipChangelog (must come after SkipChangelog handling)
+    if ($cfg.GenerateChangelog) {
+        $cfg.SkipChangelog = $false
+    }
+    
     if ($Overrides.ContainsKey('GenerateLogsAlways')) {
         $cfg.GenerateLogsAlways = [bool]$Overrides.GenerateLogsAlways
     }
