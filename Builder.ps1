@@ -94,30 +94,14 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\modules\functions.ps1"
 
 # ============================================================================
-# Cancellation Handler (Ctrl+C)
+# Cancellation Support
 # ============================================================================
-# This ensures child processes (7-Zip, Inno Setup) are killed when user cancels
+# Store paths for cleanup (will be set after config initialization)
 
-$script:BuildCancelled = $false
-
-# Handle Ctrl+C gracefully
-[Console]::TreatControlCAsInput = $false
-$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
-    if (-not $script:BuildCancelled) {
-        $script:BuildCancelled = $true
-        Write-Host "`n`n[Cancelled] Stopping child processes..." -ForegroundColor Red
-        Stop-AllChildProcesses
-    }
-}
-
-# Also set up a trap for terminating errors
-trap {
-    if (-not $script:BuildCancelled) {
-        $script:BuildCancelled = $true
-        Write-Host "`n`n[Error] Stopping child processes..." -ForegroundColor Red
-        Stop-AllChildProcesses
-    }
-    break
+$script:CleanupPaths = @{
+    TempDirectory   = $null
+    OutputDirectory = $null
+    ChangelogPath   = $null
 }
 
 # ============================================================================
@@ -208,6 +192,11 @@ Write-BuildHeader -Title 'Easy MinGW Installer Builder'
 $outputDir = if ($OutputPath) { $OutputPath } else { Join-Path $PSScriptRoot 'output' }
 $issPath = Join-Path $PSScriptRoot 'MinGW_Installer.iss'
 $releaseNotesPath = Join-Path $PSScriptRoot 'release_notes_body.md'
+
+# Update cleanup paths for cancellation handler
+$script:CleanupPaths.TempDirectory = $cfg.TempDirectory
+$script:CleanupPaths.OutputDirectory = $outputDir
+$script:CleanupPaths.ChangelogPath = $releaseNotesPath
 
 # Display build configuration
 Write-BuildInfo -Config $cfg -Architectures $Archs -OutputPath $outputDir
@@ -398,6 +387,15 @@ try {
         }
     }
 }
+catch [System.Management.Automation.PipelineStoppedException] {
+    # Ctrl+C was pressed - perform cleanup
+    Set-BuildCancelled
+    Invoke-CancellationCleanup `
+        -TempDirectory $script:CleanupPaths.TempDirectory `
+        -OutputDirectory $script:CleanupPaths.OutputDirectory `
+        -ChangelogPath $script:CleanupPaths.ChangelogPath
+    exit 1
+}
 catch {
     Write-ErrorMessage -ErrorType 'FATAL' -Message "Unhandled error: $($_.Exception.Message)"
     
@@ -408,6 +406,11 @@ catch {
     $buildSuccess = $false
 }
 finally {
+    # Skip cleanup if build was cancelled (cancellation handler already cleaned up)
+    if (Test-BuildCancelled) {
+        exit 1
+    }
+
     # ========================
     # Cleanup Child Processes
     # ========================

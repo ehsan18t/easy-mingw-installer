@@ -14,6 +14,7 @@ $script:ApiCache = @{}
 
 # Track spawned child processes for cancellation support
 $script:ChildProcesses = [System.Collections.ArrayList]::new()
+$script:BuildCancelled = $false
 
 # ============================================================================
 # Process Management Functions
@@ -43,13 +44,17 @@ function Stop-AllChildProcesses {
     foreach ($proc in $script:ChildProcesses) {
         try {
             if ($proc -and -not $proc.HasExited) {
-                Write-Host "  Stopping process: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
+                Write-Host "  Killing: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
                 $proc.Kill()
-                $proc.WaitForExit(3000)  # Wait up to 3 seconds
+                $proc.WaitForExit(5000)  # Wait up to 5 seconds
             }
         }
         catch {
-            # Process may have already exited
+            # Process may have already exited, try taskkill as fallback
+            try {
+                $null = & taskkill /F /PID $proc.Id 2>&1
+            }
+            catch { }
         }
     }
     $script:ChildProcesses.Clear()
@@ -63,6 +68,161 @@ function Clear-ChildProcesses {
     [CmdletBinding()]
     param()
     $script:ChildProcesses.Clear()
+}
+
+function Test-BuildCancelled {
+    <#
+    .SYNOPSIS
+        Returns whether the build has been cancelled.
+    #>
+    return $script:BuildCancelled
+}
+
+function Set-BuildCancelled {
+    <#
+    .SYNOPSIS
+        Marks the build as cancelled.
+    #>
+    $script:BuildCancelled = $true
+}
+
+function Invoke-CancellationCleanup {
+    <#
+    .SYNOPSIS
+        Performs cleanup when build is cancelled - kills processes and removes outputs.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$TempDirectory,
+        [string]$OutputDirectory,
+        [string]$ChangelogPath
+    )
+
+    Write-Host "`n" -NoNewline
+    Write-Host "================================================================================" -ForegroundColor Red
+    Write-Host " BUILD CANCELLED - Cleaning up..." -ForegroundColor Red
+    Write-Host "================================================================================" -ForegroundColor Red
+
+    # Kill child processes
+    Write-Host "`n[Processes]" -ForegroundColor Yellow
+    if ($script:ChildProcesses.Count -gt 0) {
+        Stop-AllChildProcesses
+        Write-Host "  All child processes terminated." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  No child processes to stop." -ForegroundColor Gray
+    }
+
+    # Clean temp directory
+    Write-Host "`n[Temp Directory]" -ForegroundColor Yellow
+    if ($TempDirectory -and (Test-Path $TempDirectory)) {
+        try {
+            Remove-Item $TempDirectory -Recurse -Force -ErrorAction Stop
+            Write-Host "  Removed: $TempDirectory" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  Failed to remove: $TempDirectory" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "  Nothing to clean." -ForegroundColor Gray
+    }
+
+    # Clean output directory
+    Write-Host "`n[Output Directory]" -ForegroundColor Yellow
+    if ($OutputDirectory -and (Test-Path $OutputDirectory)) {
+        try {
+            Remove-Item $OutputDirectory -Recurse -Force -ErrorAction Stop
+            Write-Host "  Removed: $OutputDirectory" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  Failed to remove: $OutputDirectory" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "  Nothing to clean." -ForegroundColor Gray
+    }
+
+    # Clean changelog
+    Write-Host "`n[Changelog]" -ForegroundColor Yellow
+    if ($ChangelogPath -and (Test-Path $ChangelogPath)) {
+        try {
+            Remove-Item $ChangelogPath -Force -ErrorAction Stop
+            Write-Host "  Removed: $ChangelogPath" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  Failed to remove: $ChangelogPath" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "  Nothing to clean." -ForegroundColor Gray
+    }
+
+    # Clean log files in script root
+    Write-Host "`n[Log Files]" -ForegroundColor Yellow
+    $scriptRoot = Split-Path $PSScriptRoot -Parent
+    $logFiles = Get-ChildItem -Path $scriptRoot -Filter "*.log" -File -ErrorAction SilentlyContinue
+    if ($logFiles) {
+        foreach ($log in $logFiles) {
+            try {
+                Remove-Item $log.FullName -Force -ErrorAction Stop
+                Write-Host "  Removed: $($log.Name)" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "  Failed to remove: $($log.Name)" -ForegroundColor Red
+            }
+        }
+    }
+    else {
+        Write-Host "  Nothing to clean." -ForegroundColor Gray
+    }
+
+    Write-Host "`n================================================================================" -ForegroundColor Red
+    Write-Host " Cleanup complete. Build was cancelled." -ForegroundColor Red
+    Write-Host "================================================================================`n" -ForegroundColor Red
+}
+
+function Wait-ProcessWithCleanup {
+    <#
+    .SYNOPSIS
+        Waits for a process to exit, with support for Ctrl+C cleanup.
+        Uses polling to allow the finally block to execute on termination.
+    .PARAMETER Process
+        The process to wait for.
+    .PARAMETER CleanupPaths
+        Hashtable with TempDirectory, OutputDirectory, ChangelogPath for cleanup.
+    .OUTPUTS
+        $true if process completed, $false if interrupted.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Diagnostics.Process]$Process,
+
+        [Parameter()]
+        [hashtable]$CleanupPaths
+    )
+
+    try {
+        # Poll every 500ms so we can respond to Ctrl+C
+        while (-not $Process.HasExited) {
+            $Process.WaitForExit(500)
+        }
+        return $true
+    }
+    catch [System.Management.Automation.PipelineStoppedException] {
+        # Ctrl+C was pressed
+        Set-BuildCancelled
+        
+        if ($CleanupPaths) {
+            Invoke-CancellationCleanup @CleanupPaths
+        }
+        else {
+            Stop-AllChildProcesses
+        }
+        
+        throw
+    }
 }
 
 # ============================================================================
@@ -380,7 +540,11 @@ function Expand-7ZipArchive {
     $process.StartInfo = $processInfo
     $process.Start() | Out-Null
     Register-ChildProcess -Process $process
-    $process.WaitForExit()
+    
+    # Poll for exit to allow Ctrl+C handling
+    while (-not $process.HasExited) {
+        $process.WaitForExit(500)
+    }
 
     if ($process.ExitCode -eq 0) {
         Write-SuccessMessage -Type 'Extracted' -Message "to $DestinationPath"
@@ -622,7 +786,11 @@ function Invoke-ChangelogGeneration {
         $process.StartInfo = $processInfo
         $process.Start() | Out-Null
         Register-ChildProcess -Process $process
-        $process.WaitForExit()
+        
+        # Poll for exit to allow Ctrl+C handling
+        while (-not $process.HasExited) {
+            $process.WaitForExit(500)
+        }
 
         if ($process.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
             Write-SuccessMessage -Type 'Changelog' -Message 'Generated successfully'
@@ -723,7 +891,11 @@ function Invoke-InstallerBuild {
     # Read output asynchronously to prevent deadlock
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
+    
+    # Poll for exit to allow Ctrl+C handling
+    while (-not $process.HasExited) {
+        $process.WaitForExit(500)
+    }
 
     $standardOutput = $stdout.Result
     $errorOutput = $stderr.Result
