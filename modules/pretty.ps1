@@ -277,6 +277,215 @@ function Write-GitHubActionsWarning {
 }
 
 # ============================================================================
+# Build Info Display
+# ============================================================================
+
+function Write-BuildHeader {
+    <#
+    .SYNOPSIS
+        Writes the build script header/banner.
+    .PARAMETER Title
+        The title to display (e.g., 'Easy MinGW Installer Builder').
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Title
+    )
+
+    Write-Host ''
+    Write-SeparatorLine -Character '=' -Length 60
+    Write-ColoredHost -Text "  $Title" -ForegroundColor $script:colors.Cyan
+    Write-SeparatorLine -Character '=' -Length 60
+}
+
+function Write-BuildInfo {
+    <#
+    .SYNOPSIS
+        Displays comprehensive build configuration info at startup.
+    .DESCRIPTION
+        Shows mode, active flags, tool paths, directories, and other
+        relevant configuration in a nicely formatted table.
+    .PARAMETER Config
+        The build configuration object from Get-BuildConfig.
+    .PARAMETER Architectures
+        Array of architectures being built (e.g., @('64', '32')).
+    .PARAMETER OutputPath
+        Path where build outputs will be saved.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Config,
+        
+        [Parameter()]
+        [string[]]$Architectures,
+        
+        [Parameter()]
+        [string]$OutputPath
+    )
+
+    Write-Host ''
+    Write-SeparatorLine -Character '-' -Length 50
+    Write-ColoredHost -Text '  BUILD CONFIGURATION' -ForegroundColor $script:colors.White
+    Write-SeparatorLine -Character '-' -Length 50
+
+    # Mode Information
+    Write-BuildInfoLine -Label 'Mode' -Value $(
+        if ($Config.IsTestMode) { 'TEST MODE' }
+        elseif ($Config.IsGitHubActions) { 'GitHub Actions' }
+        else { 'Normal' }
+    ) -ValueColor $(if ($Config.IsTestMode) { $script:colors.Yellow } else { $script:colors.Green })
+
+    # Active Flags
+    $flags = @()
+    if ($Config.SkipDownload) { $flags += 'SkipDownload' }
+    if ($Config.SkipBuild) { $flags += 'SkipBuild' }
+    if ($Config.SkipChangelog) { $flags += 'SkipChangelog' }
+    
+    if ($flags.Count -gt 0) {
+        Write-BuildInfoLine -Label 'Active Flags' -Value ($flags -join ', ') -ValueColor $script:colors.DarkYellow
+    }
+
+    # Log Level
+    Write-BuildInfoLine -Label 'Log Level' -Value $Config.LogLevel
+
+    Write-Host ''
+
+    # Tool Paths
+    Write-ColoredHost -Text '  Tools:' -ForegroundColor $script:colors.Gray
+    Write-BuildInfoLine -Label '7-Zip' -Value $(
+        if ($Config.SevenZipPath) { $Config.SevenZipPath } else { '(not found)' }
+    ) -ValueColor $(if ($Config.SevenZipPath) { $script:colors.Cyan } else { $script:colors.Red })
+    
+    Write-BuildInfoLine -Label 'Inno Setup' -Value $(
+        if ($Config.InnoSetupPath) { $Config.InnoSetupPath } else { '(not found)' }
+    ) -ValueColor $(if ($Config.InnoSetupPath) { $script:colors.Cyan } else { $script:colors.Red })
+
+    Write-Host ''
+
+    # Directories
+    Write-ColoredHost -Text '  Directories:' -ForegroundColor $script:colors.Gray
+    Write-BuildInfoLine -Label 'Temp' -Value $Config.TempDirectory
+    if ($OutputPath) {
+        Write-BuildInfoLine -Label 'Output' -Value $OutputPath
+    }
+
+    # Architectures
+    if ($Architectures -and $Architectures.Count -gt 0) {
+        Write-Host ''
+        Write-ColoredHost -Text '  Build Targets:' -ForegroundColor $script:colors.Gray
+        Write-BuildInfoLine -Label 'Architectures' -Value (($Architectures | ForEach-Object { "$_-bit" }) -join ', ')
+    }
+
+    Write-SeparatorLine -Character '-' -Length 50
+    Write-Host ''
+}
+
+function Write-BuildInfoLine {
+    <#
+    .SYNOPSIS
+        Writes a single line of build info with consistent formatting.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Label,
+        
+        [Parameter(Mandatory)]
+        [string]$Value,
+        
+        [System.ConsoleColor]$LabelColor = $script:colors.DarkGray,
+        [System.ConsoleColor]$ValueColor = $script:colors.Cyan
+    )
+
+    $paddedLabel = $Label.PadLeft(15)
+    Write-ColoredHost -Text "    $paddedLabel : " -ForegroundColor $LabelColor -NoNewline
+    Write-ColoredHost -Text $Value -ForegroundColor $ValueColor
+}
+
+# ============================================================================
+# Verbose/Debug Logging (respects LogLevel)
+# ============================================================================
+
+function Write-VerboseLog {
+    <#
+    .SYNOPSIS
+        Writes a verbose log message (only shown when LogLevel is 'Verbose').
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    # Check if we have access to config
+    $logLevel = 'Normal'
+    if (Get-Command Get-BuildConfig -ErrorAction SilentlyContinue) {
+        $cfg = Get-BuildConfig
+        if ($cfg -and $cfg.LogLevel) {
+            $logLevel = $cfg.LogLevel
+        }
+    }
+
+    if ($logLevel -eq 'Verbose') {
+        Write-ColoredHost -Text "    [VERBOSE] $Message" -ForegroundColor $script:colors.DarkGray
+    }
+}
+
+function Write-DebugLog {
+    <#
+    .SYNOPSIS
+        Writes a debug log message (only shown when LogLevel is 'Verbose').
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    $logLevel = 'Normal'
+    if (Get-Command Get-BuildConfig -ErrorAction SilentlyContinue) {
+        $cfg = Get-BuildConfig
+        if ($cfg -and $cfg.LogLevel) {
+            $logLevel = $cfg.LogLevel
+        }
+    }
+
+    if ($logLevel -eq 'Verbose') {
+        Write-ColoredHost -Text "    [DEBUG] $Message" -ForegroundColor $script:colors.DarkMagenta
+    }
+}
+
+function Test-ShouldLog {
+    <#
+    .SYNOPSIS
+        Returns whether logging should occur based on current log level.
+    .PARAMETER Level
+        The minimum level required ('Verbose', 'Normal', 'Quiet').
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Verbose', 'Normal', 'Quiet')]
+        [string]$Level
+    )
+
+    $currentLevel = 'Normal'
+    if (Get-Command Get-BuildConfig -ErrorAction SilentlyContinue) {
+        $cfg = Get-BuildConfig
+        if ($cfg -and $cfg.LogLevel) {
+            $currentLevel = $cfg.LogLevel
+        }
+    }
+
+    $levelOrder = @{ 'Verbose' = 0; 'Normal' = 1; 'Quiet' = 2 }
+    
+    return $levelOrder[$currentLevel] -le $levelOrder[$Level]
+}
+
+# ============================================================================
 # Build Summary
 # ============================================================================
 
