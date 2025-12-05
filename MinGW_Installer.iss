@@ -48,7 +48,14 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 
 [Languages]
-Name: "english"; MessagesFile: "inno\lang\English.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+; Custom string overrides
+ButtonNext=&Install
+WizardInfoBefore=Package Info
+InfoBeforeLabel=Details regarding the packages included in this build.
+SetupWindowTitle={#MyAppName} v{#MyAppVersion}
 
 [Files]
 Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
