@@ -8,5 +8,5 @@ mingw*/
 release_notes_body.md
 
 # Python cache
-__pycache__/
+**/__pycache__/
 *.pyc

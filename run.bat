@@ -7,13 +7,13 @@ TITLE Easy MinGW Installer Builder
 @REM ============================================================================
 
 @REM Build mode: Set to 1 to only build if there's a new release
-SET "buildOnlyIfNewRelease=0"
+SET "buildOnlyIfNewRelease=1"
 
 @REM Logging: Set to 1 to always generate build logs (not just on errors)
 SET "generateLogsAlways=0"
 
 @REM Test mode: Set to 1 to run in test mode (no downloads, uses fixtures)
-SET "testMode=1"
+SET "testMode=0"
 
 @REM Test mode flags:
 @REM   validateAssets - Verify release assets exist via API (no download)
