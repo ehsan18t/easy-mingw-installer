@@ -94,6 +94,33 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\modules\functions.ps1"
 
 # ============================================================================
+# Cancellation Handler (Ctrl+C)
+# ============================================================================
+# This ensures child processes (7-Zip, Inno Setup) are killed when user cancels
+
+$script:BuildCancelled = $false
+
+# Handle Ctrl+C gracefully
+[Console]::TreatControlCAsInput = $false
+$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+    if (-not $script:BuildCancelled) {
+        $script:BuildCancelled = $true
+        Write-Host "`n`n[Cancelled] Stopping child processes..." -ForegroundColor Red
+        Stop-AllChildProcesses
+    }
+}
+
+# Also set up a trap for terminating errors
+trap {
+    if (-not $script:BuildCancelled) {
+        $script:BuildCancelled = $true
+        Write-Host "`n`n[Error] Stopping child processes..." -ForegroundColor Red
+        Stop-AllChildProcesses
+    }
+    break
+}
+
+# ============================================================================
 # Parameter Processing
 # ============================================================================
 
@@ -382,7 +409,13 @@ catch {
 }
 finally {
     # ========================
-    # Cleanup
+    # Cleanup Child Processes
+    # ========================
+    # Clear tracked processes (they should have finished normally)
+    Clear-ChildProcesses
+
+    # ========================
+    # Cleanup Temp Directory
     # ========================
     if (-not $cfg.IsTestMode -and (Test-Path $cfg.TempDirectory)) {
         Write-VerboseLog "Cleaning up temp directory: $($cfg.TempDirectory)"

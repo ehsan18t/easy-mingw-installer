@@ -12,6 +12,59 @@
 # API response cache to avoid duplicate requests
 $script:ApiCache = @{}
 
+# Track spawned child processes for cancellation support
+$script:ChildProcesses = [System.Collections.ArrayList]::new()
+
+# ============================================================================
+# Process Management Functions
+# ============================================================================
+
+function Register-ChildProcess {
+    <#
+    .SYNOPSIS
+        Registers a child process for tracking (used for cancellation).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Diagnostics.Process]$Process
+    )
+    [void]$script:ChildProcesses.Add($Process)
+}
+
+function Stop-AllChildProcesses {
+    <#
+    .SYNOPSIS
+        Stops all tracked child processes. Called during cancellation.
+    #>
+    [CmdletBinding()]
+    param()
+
+    foreach ($proc in $script:ChildProcesses) {
+        try {
+            if ($proc -and -not $proc.HasExited) {
+                Write-Host "  Stopping process: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
+                $proc.Kill()
+                $proc.WaitForExit(3000)  # Wait up to 3 seconds
+            }
+        }
+        catch {
+            # Process may have already exited
+        }
+    }
+    $script:ChildProcesses.Clear()
+}
+
+function Clear-ChildProcesses {
+    <#
+    .SYNOPSIS
+        Clears the child process list (called after successful completion).
+    #>
+    [CmdletBinding()]
+    param()
+    $script:ChildProcesses.Clear()
+}
+
 # ============================================================================
 # GitHub API Functions
 # ============================================================================
@@ -326,6 +379,7 @@ function Expand-7ZipArchive {
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $processInfo
     $process.Start() | Out-Null
+    Register-ChildProcess -Process $process
     $process.WaitForExit()
 
     if ($process.ExitCode -eq 0) {
@@ -555,7 +609,20 @@ function Invoke-ChangelogGeneration {
             $pyArgs += '--input-file', $VersionInfoPath
         }
 
-        $process = Start-Process python -ArgumentList $pyArgs -Wait -NoNewWindow -PassThru
+        # Start Python process with tracking for cancellation
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = 'python'
+        $processInfo.Arguments = ($pyArgs | ForEach-Object { 
+            if ($_ -match '\s') { "`"$_`"" } else { $_ } 
+        }) -join ' '
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $true
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
+        $process.Start() | Out-Null
+        Register-ChildProcess -Process $process
+        $process.WaitForExit()
 
         if ($process.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
             Write-SuccessMessage -Type 'Changelog' -Message 'Generated successfully'
@@ -651,6 +718,7 @@ function Invoke-InstallerBuild {
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $processInfo
     $process.Start() | Out-Null
+    Register-ChildProcess -Process $process
     
     # Read output asynchronously to prevent deadlock
     $stdout = $process.StandardOutput.ReadToEndAsync()
