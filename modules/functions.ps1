@@ -92,6 +92,44 @@ function Get-LatestGitHubTag {
     return $null
 }
 
+function Get-GitHubTags {
+    <#
+    .SYNOPSIS
+        Gets multiple tags from a GitHub repository.
+    .PARAMETER Owner
+        Repository owner (username or organization).
+    .PARAMETER Repo
+        Repository name.
+    .PARAMETER Count
+        Number of tags to return (default: 2).
+    .OUTPUTS
+        Array of tag name strings.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Owner,
+
+        [Parameter(Mandatory)]
+        [string]$Repo,
+
+        [Parameter()]
+        [int]$Count = 2
+    )
+
+    $cfg = Get-BuildConfig
+    $uri = "$($cfg.GitHubApiBase)/repos/$Owner/$Repo/tags"
+    $tags = Invoke-GitHubApi $uri
+
+    if ($tags -and $tags.Count -gt 0) {
+        $result = $tags | Select-Object -First $Count | ForEach-Object { $_.name }
+        Write-VerboseLog "Tags for $Owner/$Repo : $($result -join ', ')"
+        return $result
+    }
+
+    return @()
+}
+
 function Find-GitHubRelease {
     <#
     .SYNOPSIS
@@ -148,7 +186,7 @@ function Find-GitHubRelease {
 function Invoke-FileDownload {
     <#
     .SYNOPSIS
-        Downloads a file with retry logic and progress display.
+        Downloads a file with retry logic and detailed progress display.
     .PARAMETER Url
         The URL to download from.
     .PARAMETER Destination
@@ -178,12 +216,51 @@ function Invoke-FileDownload {
     # Retry loop
     for ($attempt = 1; $attempt -le $cfg.DownloadRetries; $attempt++) {
         try {
-            # Disable progress bar in GitHub Actions for performance
+            # Use HttpWebRequest for progress tracking in console, Invoke-WebRequest in GitHub Actions
             if ($cfg.IsGitHubActions) {
                 $ProgressPreference = 'SilentlyContinue'
+                Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
             }
-
-            Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+            else {
+                # HttpWebRequest with progress display
+                $webRequest = [System.Net.HttpWebRequest]::Create($Url)
+                $webRequest.UserAgent = $cfg.GitHubUserAgent
+                $webRequest.Timeout = $cfg.ApiTimeoutSeconds * 1000
+                
+                $response = $webRequest.GetResponse()
+                $totalLength = $response.ContentLength
+                $totalLengthKB = [math]::Round($totalLength / 1KB, 0)
+                
+                $responseStream = $response.GetResponseStream()
+                $fileStream = [System.IO.FileStream]::new($Destination, [System.IO.FileMode]::Create)
+                
+                $buffer = New-Object byte[] $cfg.DownloadBufferSize
+                $downloadedBytes = 0
+                $lastProgressUpdate = [DateTime]::MinValue
+                
+                try {
+                    while (($bytesRead = $responseStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                        $fileStream.Write($buffer, 0, $bytesRead)
+                        $downloadedBytes += $bytesRead
+                        
+                        # Update progress every 100ms to avoid console flicker
+                        $now = [DateTime]::Now
+                        if (($now - $lastProgressUpdate).TotalMilliseconds -ge 100) {
+                            $downloadedKB = [math]::Round($downloadedBytes / 1KB, 0)
+                            $percentage = if ($totalLength -gt 0) { [math]::Round(($downloadedBytes / $totalLength) * 100, 0) } else { 0 }
+                            Write-UpdatingLine -Text "  Progress (Attempt $attempt): ${downloadedKB}KB / ${totalLengthKB}KB ($percentage%)"
+                            $lastProgressUpdate = $now
+                        }
+                    }
+                }
+                finally {
+                    $fileStream.Close()
+                    $responseStream.Close()
+                    $response.Close()
+                }
+                
+                End-UpdatingLine
+            }
 
             if (Test-Path $Destination) {
                 $fileSize = (Get-Item $Destination).Length
@@ -193,6 +270,11 @@ function Invoke-FileDownload {
             }
         }
         catch {
+            # Clean up partial download
+            if (Test-Path $Destination) {
+                Remove-Item $Destination -Force -ErrorAction SilentlyContinue
+            }
+            
             Write-WarningMessage -Type "Attempt $attempt" -Message $_.Exception.Message
 
             if ($attempt -lt $cfg.DownloadRetries) {
@@ -395,19 +477,21 @@ function Invoke-ChangelogGeneration {
     .SYNOPSIS
         Generates a changelog using the Python script or fallback.
     .PARAMETER VersionInfoPath
-        Path to the version_info.txt file.
+        Path to the version_info.txt file. Optional if CurrentTag is provided.
     .PARAMETER OutputPath
         Path to write the changelog.
     .PARAMETER Version
         The current version.
     .PARAMETER PreviousTag
         The previous release tag for comparison.
+    .PARAMETER CurrentTag
+        If provided, fetch current package info from this GitHub release tag instead of local file.
     .OUTPUTS
         $true on success, $false on failure.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
+        [Parameter()]
         [string]$VersionInfoPath,
 
         [Parameter(Mandatory)]
@@ -417,7 +501,10 @@ function Invoke-ChangelogGeneration {
         [string]$Version,
 
         [Parameter()]
-        [string]$PreviousTag
+        [string]$PreviousTag,
+
+        [Parameter()]
+        [string]$CurrentTag
     )
 
     # Skip if already exists
@@ -426,8 +513,8 @@ function Invoke-ChangelogGeneration {
         return $true
     }
 
-    # Fallback if no version info
-    if (-not (Test-Path $VersionInfoPath)) {
+    # Fallback if no version info and no CurrentTag
+    if (-not $CurrentTag -and -not (Test-Path $VersionInfoPath)) {
         return New-FallbackChangelog -OutputPath $OutputPath -Version $Version
     }
 
@@ -445,17 +532,28 @@ function Invoke-ChangelogGeneration {
         }
 
         $cfg = Get-BuildConfig
-        $tag = if ($PreviousTag) { $PreviousTag } else { 'HEAD' }
 
         $pyArgs = @(
             $pyScript
-            '--input-file', $VersionInfoPath
             '--output-file', $OutputPath
-            '--prev-tag', $tag
             '--current-build-tag', $Version
             '--github-owner', $cfg.ProjectOwner
             '--github-repo', $cfg.ProjectRepo
         )
+        
+        # Only add prev-tag if we have a valid one (not empty/null)
+        if ($PreviousTag) {
+            $pyArgs += '--prev-tag', $PreviousTag
+        }
+
+        # Use CurrentTag to fetch from GitHub, otherwise use local file
+        if ($CurrentTag) {
+            $pyArgs += '--current-tag', $CurrentTag
+            Write-VerboseLog "Fetching current package info from GitHub tag: $CurrentTag"
+        }
+        else {
+            $pyArgs += '--input-file', $VersionInfoPath
+        }
 
         $process = Start-Process python -ArgumentList $pyArgs -Wait -NoNewWindow -PassThru
 
@@ -559,22 +657,56 @@ function Invoke-InstallerBuild {
     $stderr = $process.StandardError.ReadToEndAsync()
     $process.WaitForExit()
 
+    $standardOutput = $stdout.Result
+    $errorOutput = $stderr.Result
+
+    # Determine if we should write log file
+    $shouldWriteLog = $cfg.GenerateLogsAlways -or ($process.ExitCode -ne 0)
+    
+    if ($shouldWriteLog) {
+        $logFileName = "build_${OutputName}_${Architecture}.log"
+        $logPath = Join-Path $OutputDirectory $logFileName
+        
+        $logContent = @"
+================================================================================
+Inno Setup Build Log
+================================================================================
+Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Exit Code: $($process.ExitCode)
+Name: $Name
+Version: $Version
+Architecture: $Architecture-bit
+Source: $SourcePath
+Output: $OutputDirectory
+================================================================================
+
+=== Standard Output ===
+$standardOutput
+
+=== Standard Error ===
+$errorOutput
+"@
+        $logContent | Out-File -FilePath $logPath -Encoding UTF8
+        Write-VerboseLog "Build log saved: $logFileName"
+    }
+
     if ($process.ExitCode -eq 0) {
         $outputFile = "$OutputName.v$Version.$Architecture-bit.exe"
         Write-SuccessMessage -Type 'Built' -Message $outputFile
 
-        # Generate hashes for the built installer
-        $exePath = Join-Path $OutputDirectory $outputFile
-        if (Test-Path $exePath) {
-            Invoke-HashGeneration -FilePath $exePath -OutputDirectory $OutputDirectory `
-                -BaseName $OutputName -Version $Version -Architecture $Architecture
+        # Generate hashes for the built installer (unless skipped)
+        if (-not $cfg.SkipHashes) {
+            $exePath = Join-Path $OutputDirectory $outputFile
+            if (Test-Path $exePath) {
+                Invoke-HashGeneration -FilePath $exePath -OutputDirectory $OutputDirectory `
+                    -BaseName $OutputName -Version $Version -Architecture $Architecture
+            }
         }
 
         return $true
     }
 
     # Build failed - show error details
-    $errorOutput = $stderr.Result
     Write-ErrorMessage -ErrorType 'Build Failed' -Message "Inno Setup exit code: $($process.ExitCode)"
     if ($errorOutput) {
         Write-VerboseLog "Inno Setup error: $errorOutput"
@@ -659,6 +791,8 @@ function Invoke-ArchitectureBuild {
         The release date string.
     .PARAMETER PreviousTag
         The previous release tag for changelog.
+    .PARAMETER CurrentTag
+        If provided, fetch current package info from this GitHub release for changelog.
     .PARAMETER OutputDirectory
         Directory for build outputs.
     .PARAMETER TempDirectory
@@ -690,6 +824,9 @@ function Invoke-ArchitectureBuild {
         [Parameter()]
         [string]$PreviousTag,
 
+        [Parameter()]
+        [string]$CurrentTag,
+
         [Parameter(Mandatory)]
         [string]$OutputDirectory,
 
@@ -710,7 +847,8 @@ function Invoke-ArchitectureBuild {
 
     # Find matching asset
     $asset = $null
-    if ($cfg.IsTestMode) {
+    if ($cfg.IsTestMode -and -not $cfg.ValidateAssets) {
+        # Pure test mode: use mock asset
         $asset = @{
             name                  = "mingw-test-$Architecture.7z"
             browser_download_url  = 'test://fake.7z'
@@ -718,12 +856,18 @@ function Invoke-ArchitectureBuild {
         Write-StatusInfo -Type 'Asset' -Message "$($asset.name) (test mode)"
     }
     else {
+        # Find real asset from release
         $asset = $Release.assets | Where-Object { $_.name -match $AssetPattern } | Select-Object -First 1
         if (-not $asset) {
             Write-ErrorMessage -ErrorType 'Asset Not Found' -Message "No match for pattern: $AssetPattern"
             return $false
         }
         Write-StatusInfo -Type 'Asset' -Message $asset.name
+        
+        # If in test mode with ValidateAssets, just validate and continue with test fixtures
+        if ($cfg.IsTestMode -and $cfg.ValidateAssets) {
+            Write-SuccessMessage -Type 'Validated' -Message "Asset exists: $($asset.name)"
+        }
     }
 
     # Set up working directories
@@ -782,11 +926,21 @@ function Invoke-ArchitectureBuild {
         # Changelog Generation
         # ========================
         if (-not $cfg.SkipChangelog) {
-            $null = Invoke-ChangelogGeneration `
-                -VersionInfoPath $buildInfoPath `
-                -OutputPath $ReleaseNotesPath `
-                -Version $Version `
-                -PreviousTag $PreviousTag
+            $changelogParams = @{
+                OutputPath  = $ReleaseNotesPath
+                Version     = $Version
+                PreviousTag = $PreviousTag
+            }
+            
+            # In test mode with GenerateChangelog, fetch from GitHub instead of local file
+            if ($CurrentTag) {
+                $changelogParams['CurrentTag'] = $CurrentTag
+            }
+            else {
+                $changelogParams['VersionInfoPath'] = $buildInfoPath
+            }
+            
+            $null = Invoke-ChangelogGeneration @changelogParams
         }
 
         # ========================
