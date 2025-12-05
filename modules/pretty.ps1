@@ -1,21 +1,31 @@
-$script:colors = @{ # Using script scope explicitly for clarity
-    Black        = "Black"
-    DarkBlue     = "DarkBlue"
-    DarkGreen    = "DarkGreen"
-    DarkCyan     = "DarkCyan"
-    DarkRed      = "DarkRed"
-    DarkMagenta  = "DarkMagenta"
-    DarkYellow   = "DarkYellow"
-    Gray         = "Gray"
-    DarkGray     = "DarkGray"
-    Blue         = "Blue"
-    Green        = "Green"
-    Cyan         = "Cyan"
-    Red          = "Red"
-    Magenta      = "Magenta"
-    Yellow       = "Yellow"
-    White        = "White"
+# ============================================================================
+# Easy MinGW Installer - Logging & Output Module
+# ============================================================================
+# Provides formatted, colored console output with GitHub Actions compatibility.
+# ============================================================================
+
+# Console colors
+$script:colors = @{
+    Black       = 'Black'
+    DarkBlue    = 'DarkBlue'
+    DarkGreen   = 'DarkGreen'
+    DarkCyan    = 'DarkCyan'
+    DarkRed     = 'DarkRed'
+    DarkMagenta = 'DarkMagenta'
+    DarkYellow  = 'DarkYellow'
+    Gray        = 'Gray'
+    DarkGray    = 'DarkGray'
+    Blue        = 'Blue'
+    Green       = 'Green'
+    Cyan        = 'Cyan'
+    Red         = 'Red'
+    Magenta     = 'Magenta'
+    Yellow      = 'Yellow'
+    White       = 'White'
 }
+
+# Detect GitHub Actions environment
+$script:IsGitHubActions = $env:GITHUB_ACTIONS -eq 'true'
 
 # Function to print colored output
 function Write-ColoredHost {
@@ -166,18 +176,150 @@ function Write-UpdatingLine {
         [Parameter(Mandatory = $false)]
         [System.ConsoleColor]$ForegroundColor = $script:colors.Yellow,
         [Parameter(Mandatory = $false)]
-        # This length is used to pad the string with spaces, ensuring that
-        # shorter subsequent messages clear out longer previous messages on the same line.
-        # Adjust if your typical progress messages are longer.
-        [int]$LineClearLength = 78 # One less than typical 80-char width to be safe
+        [int]$LineClearLength = 78
     )
-    # Prepend carriage return, then the text padded with spaces to clear the previous line.
-    $lineContent = "`r$($Text.PadRight($LineClearLength))"
-    Write-Host -Object $lineContent -NoNewline -ForegroundColor $ForegroundColor
+    
+    if ($script:IsGitHubActions) {
+        # GitHub Actions doesn't support carriage return updates
+        Write-Host $Text -ForegroundColor $ForegroundColor
+    }
+    else {
+        $lineContent = "`r$($Text.PadRight($LineClearLength))"
+        Write-Host -Object $lineContent -NoNewline -ForegroundColor $ForegroundColor
+    }
 }
 
 function End-UpdatingLine {
     [CmdletBinding()]
     param()
-    Write-Host "" # Just print a newline to move to the next line
+    
+    if (-not $script:IsGitHubActions) {
+        Write-Host ''
+    }
+}
+
+# ============================================================================
+# GitHub Actions Integration
+# ============================================================================
+
+function Write-GitHubActionsGroup {
+    <#
+    .SYNOPSIS
+        Starts or ends a collapsible group in GitHub Actions logs.
+    #>
+    [CmdletBinding()]
+    param(
+        [switch]$Start,
+        [switch]$End,
+        [string]$Name
+    )
+
+    if (-not $script:IsGitHubActions) { return }
+
+    if ($Start -and $Name) {
+        Write-Host "::group::$Name"
+    }
+    elseif ($End) {
+        Write-Host '::endgroup::'
+    }
+}
+
+function Write-GitHubActionsError {
+    <#
+    .SYNOPSIS
+        Writes an error annotation in GitHub Actions.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message,
+        [string]$File,
+        [int]$Line,
+        [int]$Column
+    )
+
+    if (-not $script:IsGitHubActions) {
+        Write-ErrorMessage -ErrorType 'ERROR' -Message $Message
+        return
+    }
+
+    $annotation = '::error'
+    $params = @()
+    if ($File) { $params += "file=$File" }
+    if ($Line -gt 0) { $params += "line=$Line" }
+    if ($Column -gt 0) { $params += "col=$Column" }
+    
+    if ($params.Count -gt 0) {
+        $annotation += " $($params -join ',')"
+    }
+    $annotation += "::$Message"
+    
+    Write-Host $annotation
+}
+
+function Write-GitHubActionsWarning {
+    <#
+    .SYNOPSIS
+        Writes a warning annotation in GitHub Actions.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    if (-not $script:IsGitHubActions) {
+        Write-WarningMessage -Type 'WARNING' -Message $Message
+        return
+    }
+
+    Write-Host "::warning::$Message"
+}
+
+# ============================================================================
+# Build Summary
+# ============================================================================
+
+function Write-BuildSummary {
+    <#
+    .SYNOPSIS
+        Writes a formatted build summary.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Success,
+        [string]$Version,
+        [string[]]$Architectures,
+        [string]$OutputPath,
+        [TimeSpan]$Duration
+    )
+
+    Write-SeparatorLine -Character '=' -Length 60
+    
+    if ($Success) {
+        Write-SuccessMessage -Type 'BUILD COMPLETE' -Message 'All operations succeeded'
+    }
+    else {
+        Write-ErrorMessage -ErrorType 'BUILD FAILED' -Message 'One or more operations failed'
+    }
+
+    if ($Version) {
+        Write-StatusInfo -Type 'Version' -Message $Version
+    }
+
+    if ($Architectures) {
+        Write-StatusInfo -Type 'Architectures' -Message ($Architectures -join ', ')
+    }
+
+    if ($OutputPath) {
+        Write-StatusInfo -Type 'Output' -Message $OutputPath
+    }
+
+    if ($Duration) {
+        $durationStr = '{0:mm}m {0:ss}s' -f $Duration
+        Write-StatusInfo -Type 'Duration' -Message $durationStr
+    }
+
+    Write-SeparatorLine -Character '=' -Length 60
 }
