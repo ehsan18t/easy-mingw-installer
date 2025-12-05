@@ -13,13 +13,12 @@ SET "buildOnlyIfNewRelease=1"
 SET "generateLogsAlways=0"
 
 @REM Test mode: Set to 1 to run in test mode (no downloads, uses fixtures)
-SET "testMode=0"
+SET "testMode=1"
 
 @REM Skip flags (advanced): Override individual steps
 @REM SET "skipDownload=0"
 @REM SET "skipBuild=0"
 @REM SET "skipChangelog=0"
-@REM SET "offlineMode=0"
 
 @REM ============================================================================
 @REM BUILD PARAMETERS - Change these to target different GCC versions
@@ -84,7 +83,6 @@ IF "%testMode%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -TestMode )
 @REM IF "%skipDownload%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipDownload )
 @REM IF "%skipBuild%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipBuild )
 @REM IF "%skipChangelog%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -SkipChangelog )
-@REM IF "%offlineMode%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -OfflineMode )
 
 @REM ============================================================================
 @REM RUN BUILD
