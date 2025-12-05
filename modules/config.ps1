@@ -175,7 +175,7 @@ function Get-BuildConfig {
         # API Settings
         # ========================
         GitHubApiBase     = 'https://api.github.com'
-        GitHubUserAgent   = 'easy-mingw-installer-builder'
+        GitHubUserAgent   = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
         ApiTimeoutSeconds = 30
         ApiMaxRetries     = 3
         ApiRetryDelaySeconds = 5
