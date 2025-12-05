@@ -96,12 +96,13 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 # Cancellation Support
 # ============================================================================
-# Store paths for cleanup (will be set after config initialization)
+# Store paths and state for cleanup (will be set after config initialization)
 
 $script:CleanupPaths = @{
     TempDirectory   = $null
     OutputDirectory = $null
     ChangelogPath   = $null
+    StartTime       = $null
 }
 
 # ============================================================================
@@ -242,6 +243,7 @@ if ($Archs.Count -ne $NamePatterns.Count) {
 
 $buildSuccess = $false
 $buildStartTime = Get-Date
+$script:CleanupPaths.StartTime = $buildStartTime
 
 try {
     Write-StatusInfo -Type 'Starting' -Message 'Build operations...'
@@ -393,7 +395,8 @@ catch [System.Management.Automation.PipelineStoppedException] {
     Invoke-CancellationCleanup `
         -TempDirectory $script:CleanupPaths.TempDirectory `
         -OutputDirectory $script:CleanupPaths.OutputDirectory `
-        -ChangelogPath $script:CleanupPaths.ChangelogPath
+        -ChangelogPath $script:CleanupPaths.ChangelogPath `
+        -StartTime $script:CleanupPaths.StartTime
     exit 1
 }
 catch {

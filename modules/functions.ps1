@@ -95,91 +95,82 @@ function Invoke-CancellationCleanup {
     param(
         [string]$TempDirectory,
         [string]$OutputDirectory,
-        [string]$ChangelogPath
+        [string]$ChangelogPath,
+        [DateTime]$StartTime
     )
 
-    Write-Host "`n" -NoNewline
-    Write-Host "================================================================================" -ForegroundColor Red
-    Write-Host " BUILD CANCELLED - Cleaning up..." -ForegroundColor Red
-    Write-Host "================================================================================" -ForegroundColor Red
+    Write-Host ""
+    Write-SeparatorLine -Character '=' -Length 60
+    Write-WarningMessage -Type 'CANCELLED' -Message 'Build interrupted - cleaning up...'
+    Write-SeparatorLine -Character '-' -Length 60
 
     # Kill child processes
-    Write-Host "`n[Processes]" -ForegroundColor Yellow
+    Write-Host ""
+    Write-StatusInfo -Type 'Processes' -Message 'Terminating child processes...'
     if ($script:ChildProcesses.Count -gt 0) {
         Stop-AllChildProcesses
-        Write-Host "  All child processes terminated." -ForegroundColor Green
+        Write-SuccessMessage -Type 'Processes' -Message 'All child processes terminated'
     }
     else {
-        Write-Host "  No child processes to stop." -ForegroundColor Gray
+        Write-StatusInfo -Type 'Processes' -Message 'No child processes to stop'
     }
 
     # Clean temp directory
-    Write-Host "`n[Temp Directory]" -ForegroundColor Yellow
     if ($TempDirectory -and (Test-Path $TempDirectory)) {
         try {
             Remove-Item $TempDirectory -Recurse -Force -ErrorAction Stop
-            Write-Host "  Removed: $TempDirectory" -ForegroundColor Green
+            Write-SuccessMessage -Type 'Temp' -Message "Removed: $TempDirectory"
         }
         catch {
-            Write-Host "  Failed to remove: $TempDirectory" -ForegroundColor Red
+            Write-WarningMessage -Type 'Temp' -Message "Failed to remove: $TempDirectory"
         }
-    }
-    else {
-        Write-Host "  Nothing to clean." -ForegroundColor Gray
     }
 
     # Clean output directory
-    Write-Host "`n[Output Directory]" -ForegroundColor Yellow
     if ($OutputDirectory -and (Test-Path $OutputDirectory)) {
         try {
             Remove-Item $OutputDirectory -Recurse -Force -ErrorAction Stop
-            Write-Host "  Removed: $OutputDirectory" -ForegroundColor Green
+            Write-SuccessMessage -Type 'Output' -Message "Removed: $OutputDirectory"
         }
         catch {
-            Write-Host "  Failed to remove: $OutputDirectory" -ForegroundColor Red
+            Write-WarningMessage -Type 'Output' -Message "Failed to remove: $OutputDirectory"
         }
-    }
-    else {
-        Write-Host "  Nothing to clean." -ForegroundColor Gray
     }
 
     # Clean changelog
-    Write-Host "`n[Changelog]" -ForegroundColor Yellow
     if ($ChangelogPath -and (Test-Path $ChangelogPath)) {
         try {
             Remove-Item $ChangelogPath -Force -ErrorAction Stop
-            Write-Host "  Removed: $ChangelogPath" -ForegroundColor Green
+            Write-SuccessMessage -Type 'Changelog' -Message "Removed: $(Split-Path $ChangelogPath -Leaf)"
         }
         catch {
-            Write-Host "  Failed to remove: $ChangelogPath" -ForegroundColor Red
+            Write-WarningMessage -Type 'Changelog' -Message "Failed to remove changelog"
         }
-    }
-    else {
-        Write-Host "  Nothing to clean." -ForegroundColor Gray
     }
 
     # Clean log files in script root
-    Write-Host "`n[Log Files]" -ForegroundColor Yellow
     $scriptRoot = Split-Path $PSScriptRoot -Parent
     $logFiles = Get-ChildItem -Path $scriptRoot -Filter "*.log" -File -ErrorAction SilentlyContinue
     if ($logFiles) {
+        $removedCount = 0
         foreach ($log in $logFiles) {
             try {
                 Remove-Item $log.FullName -Force -ErrorAction Stop
-                Write-Host "  Removed: $($log.Name)" -ForegroundColor Green
+                $removedCount++
             }
-            catch {
-                Write-Host "  Failed to remove: $($log.Name)" -ForegroundColor Red
-            }
+            catch { }
+        }
+        if ($removedCount -gt 0) {
+            Write-SuccessMessage -Type 'Logs' -Message "Removed $removedCount log file(s)"
         }
     }
-    else {
-        Write-Host "  Nothing to clean." -ForegroundColor Gray
-    }
 
-    Write-Host "`n================================================================================" -ForegroundColor Red
-    Write-Host " Cleanup complete. Build was cancelled." -ForegroundColor Red
-    Write-Host "================================================================================`n" -ForegroundColor Red
+    # Calculate duration if start time provided
+    $duration = if ($StartTime) { (Get-Date) - $StartTime } else { $null }
+
+    # Final summary
+    Write-Host ""
+    Write-BuildSummary -Success $false -Cancelled -Duration $duration
 }
 
 function Wait-ProcessWithCleanup {

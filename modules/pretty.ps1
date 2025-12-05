@@ -498,6 +498,10 @@ function Write-BuildSummary {
     param(
         [Parameter(Mandatory)]
         [bool]$Success,
+        
+        [Parameter()]
+        [switch]$Cancelled,
+        
         [string]$Version,
         [string[]]$Architectures,
         [string]$OutputPath,
@@ -506,7 +510,10 @@ function Write-BuildSummary {
 
     Write-SeparatorLine -Character '=' -Length 60
     
-    if ($Success) {
+    if ($Cancelled) {
+        Write-WarningMessage -Type 'BUILD CANCELLED' -Message 'Operation was interrupted by user'
+    }
+    elseif ($Success) {
         Write-SuccessMessage -Type 'BUILD COMPLETE' -Message 'All operations succeeded'
     }
     else {
