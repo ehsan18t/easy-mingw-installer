@@ -44,24 +44,35 @@ ENV_GITHUB_TOKEN = "GITHUB_TOKEN"
 # Logging Functions
 # =============================================================================
 
+# Log level prefixes matching PowerShell output style
+_LOG_PREFIXES = {
+    "info": " >> ",
+    "success": " ++ ",
+    "warning": " !! ",
+    "error": " ** ",
+}
+
+
+def _log(level: str, log_type: str, message: str) -> None:
+    """Print formatted message matching PowerShell output style."""
+    prefix = _LOG_PREFIXES.get(level, " >> ")
+    print(f"{prefix}{log_type}: {message}", file=sys.stderr)
+
+
 def log_info(log_type: str, message: str) -> None:
-    """Print formatted info message matching PowerShell output style."""
-    print(f" >> {log_type}: {message}", file=sys.stderr)
+    _log("info", log_type, message)
 
 
 def log_success(log_type: str, message: str) -> None:
-    """Print formatted success message matching PowerShell output style."""
-    print(f" ++ {log_type}: {message}", file=sys.stderr)
+    _log("success", log_type, message)
 
 
 def log_warning(log_type: str, message: str) -> None:
-    """Print formatted warning message matching PowerShell output style."""
-    print(f" !! {log_type}: {message}", file=sys.stderr)
+    _log("warning", log_type, message)
 
 
 def log_error(log_type: str, message: str) -> None:
-    """Print formatted error message matching PowerShell output style."""
-    print(f" ** {log_type}: {message}", file=sys.stderr)
+    _log("error", log_type, message)
 
 
 # =============================================================================
@@ -280,6 +291,10 @@ class ChangelogGenerator:
         self.markdown_output: List[str] = []
         self.current_package_lines: List[str] = []
 
+    def _append(self, *lines: str) -> None:
+        """Append one or more lines to markdown output."""
+        self.markdown_output.extend(lines)
+
     def _parse_from_github_release(self, tag: str) -> bool:
         """
         Parse package info from a GitHub release.
@@ -305,38 +320,33 @@ class ChangelogGenerator:
 
             # Look for Package Info section header
             if re.match(PACKAGE_INFO_HEADER_PATTERN, line, re.IGNORECASE):
-                self.markdown_output.append("## Package Info")
+                self._append("## Package Info")
                 in_package_info = True
                 continue
 
             # Look for winlibs description line
             if in_package_info and WINLIBS_PREFIX in line and WINLIBS_SUFFIX in line:
-                self.markdown_output.append(WINLIBS_FULL_LINE)
+                self._append(WINLIBS_FULL_LINE)
                 in_package_list = True
                 continue
 
             if in_package_list:
                 if line_strip.startswith("- "):
                     self.current_package_lines.append(line_strip)
-                    self.markdown_output.append(line_strip)
+                    self._append(line_strip)
                 elif re.match(SECTION_HEADER_PATTERN, line):
                     in_package_list = False
                     in_package_info = False
-                    self.markdown_output.append("")
+                    self._append("")
 
             # Extract thread model, runtime, build date
             if not in_package_list and in_package_info:
                 if "<strong>Thread model:</strong>" in line:
-                    self.markdown_output.append(line_strip)
-                    self.markdown_output.append("")
-                    self.markdown_output.append("<br>")
-                    self.markdown_output.append("")
+                    self._append(line_strip, "", "<br>", "")
                 elif "<strong>Runtime library:</strong>" in line:
-                    self.markdown_output.append(line_strip)
-                    self.markdown_output.append("")
+                    self._append(line_strip, "")
                 elif line_strip.startswith(">") and "compiled with GCC" in line:
-                    self.markdown_output.append(line_strip)
-                    self.markdown_output.append("")
+                    self._append(line_strip, "")
 
         if not self.current_package_lines:
             log_warning(
@@ -368,57 +378,46 @@ class ChangelogGenerator:
 
             # Look for winlibs description line to start package section
             if not in_package_list and WINLIBS_PREFIX in line_content and WINLIBS_SUFFIX in line_content:
-                self.markdown_output.append("## Package Info")
-                self.markdown_output.append(WINLIBS_FULL_LINE)
+                self._append("## Package Info", WINLIBS_FULL_LINE)
                 in_package_list = True
                 continue
 
             if in_package_list:
                 if line_strip.startswith("- "):
                     self.current_package_lines.append(line_strip)
-                    self.markdown_output.append(line_strip)
+                    self._append(line_strip)
                 elif not line_strip:
                     pass
                 elif (line_strip.startswith("Thread model:") or
                       line_strip.startswith("Runtime library:") or
                       ("This build was compiled with GCC" in line_content and "and packaged on" in line_content)):
                     in_package_list = False
-                    self.markdown_output.append("")
+                    self._append("")
                 elif self.markdown_output and self.markdown_output[-1].startswith("- "):
                     in_package_list = False
-                    self.markdown_output.append("")
+                    self._append("")
 
             if not in_package_list:
                 if line_strip.startswith("Thread model:"):
                     thread_model = line_strip.split(":", 1)[1].strip()
                     if thread_model.lower() == "posix":
                         thread_model = "POSIX"
-                    self.markdown_output.append(
-                        f"<strong>Thread model:</strong> {thread_model}")
-                    self.markdown_output.append("")
-                    self.markdown_output.append("<br>")
-                    self.markdown_output.append("")
+                    self._append(f"<strong>Thread model:</strong> {thread_model}", "", "<br>", "")
                 elif line_strip.startswith("Runtime library:"):
                     runtime = line_strip.split(":", 1)[1].strip()
-                    self.markdown_output.append(
-                        f"<strong>Runtime library:</strong> {runtime}<br>")
-                    self.markdown_output.append("")
+                    self._append(f"<strong>Runtime library:</strong> {runtime}<br>", "")
                 elif "This build was compiled with GCC" in line_content and "and packaged on" in line_content:
-                    build_line = line_strip.rstrip(".")
-                    self.markdown_output.append(f"> {build_line}")
-                    self.markdown_output.append("")
+                    self._append(f"> {line_strip.rstrip('.')}", "")
 
         return True
 
     def _add_script_changelog(self) -> None:
         """Add the static script/installer changelog section."""
-        self.markdown_output.append("## Script/Installer Changelogs")
-        self.markdown_output.append("* None")
-        self.markdown_output.append("")
+        self._append("## Script/Installer Changelogs", "* None", "")
 
     def _compare_packages(self, prev_tag: Optional[str]) -> None:
         """Compare current and previous packages to generate changelog."""
-        self.markdown_output.append("## Package Changelogs")
+        self._append("## Package Changelogs")
 
         previous_packages: Dict[str, Package] = {}
         previous_body_lines: List[str] = []
@@ -464,7 +463,7 @@ class ChangelogGenerator:
             self._add_no_changes_message(
                 prev_tag, previous_body_lines, previous_packages, current_packages)
 
-        self.markdown_output.append("")
+        self._append("")
 
     def _add_no_changes_message(
         self,
@@ -475,43 +474,35 @@ class ChangelogGenerator:
     ) -> None:
         """Add appropriate message when no package changes detected."""
         if not prev_tag:
-            self.markdown_output.append(
-                "* No previous version to compare against.")
+            self._append("* No previous version to compare against.")
         elif prev_body_lines and prev_packages:
-            self.markdown_output.append(
-                f"* No package changes detected compared to the previous version (`{prev_tag}`).")
+            self._append(f"* No package changes detected compared to the previous version (`{prev_tag}`).")
         elif prev_body_lines and not prev_packages:
-            self.markdown_output.append(
-                f"* Previous release body for tag `'{prev_tag}'` was found but no package list could be parsed.")
+            self._append(f"* Previous release body for tag `'{prev_tag}'` was found but no package list could be parsed.")
         else:
-            self.markdown_output.append(
-                "* Could not retrieve previous version's package list.")
+            self._append("* Could not retrieve previous version's package list.")
 
         if not current_packages:
-            self.markdown_output.append("* No current packages found to list.")
+            self._append("* No current packages found to list.")
 
     def _add_full_changelog_link(self, current_build_tag: str, prev_tag: Optional[str]) -> None:
         """Add the full changelog link section."""
-        self.markdown_output.append("<br>")
-        self.markdown_output.append("")
+        self._append("<br>", "")
 
         if current_build_tag and prev_tag:
             url = f"https://github.com/{self.owner}/{self.repo}/compare/{prev_tag}...{current_build_tag}"
-            self.markdown_output.append(f"**Full Changelog**: {url}")
+            self._append(f"**Full Changelog**: {url}")
         else:
-            error_msg = "**Full Changelog**: [TODO: Update link"
+            parts = ["**Full Changelog**: [TODO: Update link"]
             if not prev_tag:
-                error_msg += " - Previous project tag missing"
+                parts.append(" - Previous project tag missing")
             if not current_build_tag:
-                error_msg += " - Current build tag missing"
-            error_msg += "]"
-            self.markdown_output.append(error_msg)
+                parts.append(" - Current build tag missing")
+            parts.append("]")
+            self._append("".join(parts))
             log_warning("Changelog", "Full changelog link is incomplete")
 
-        self.markdown_output.append("")
-        self.markdown_output.append("<br>")
-        self.markdown_output.append("")
-        self.markdown_output.append("### File Hash")
+        self._append("", "<br>", "", "### File Hash")
 
     def generate(
         self,
@@ -546,7 +537,7 @@ class ChangelogGenerator:
         if not self.current_package_lines and "## Package Info" in self.markdown_output:
             log_warning("Packages", "Could not parse package list from input")
             if self.markdown_output and self.markdown_output[-1] != "":
-                self.markdown_output.append("")
+                self._append("")
 
         # Add sections
         self._add_script_changelog()
