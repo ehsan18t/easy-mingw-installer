@@ -26,7 +26,7 @@ var
     Paths: string;
     P: Integer;
 begin
-    { Skip if registry entry not exists }
+    { Skip if registry entry doesn't exist }
     if not RegQueryStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths) then
         exit;
 
@@ -34,11 +34,11 @@ begin
     P := Pos(Uppercase(Path) + ';', Uppercase(Paths));
     if P = 0 then exit;
 
-    { Update path variable }
+    { Remove the path from the variable }
     Delete(Paths, P, Length(Path) + 1);
 
-    { Overwrite path environment variable }
+    { Write updated path environment variable }
     if RegWriteStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths)
-    then Log(Format('The [%s] removed from PATH: [%s]', [Path, Paths]))
-    else Log(Format('Error while removing the [%s] from PATH: [%s]', [Path, Paths]));
+    then Log(Format('Removed [%s] from PATH', [Path]))
+    else Log(Format('Error removing [%s] from PATH', [Path]));
 end;
