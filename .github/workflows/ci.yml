@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      - master
-      - revamp-scripts
     paths-ignore:
       - "*.md"
       - "LICENSE"
