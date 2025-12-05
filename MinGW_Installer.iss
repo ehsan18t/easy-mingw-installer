@@ -56,6 +56,7 @@ Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 
 [Code]
 const
+  { Auto-click constants for skipping pages }
   BN_CLICKED = 0;
   WM_COMMAND = $0111;
   CN_BASE = $BC00;
@@ -63,35 +64,35 @@ const
 
 var
   SkipInfoPage: Boolean;
+  MinGWDir: string;    { Initialized in InitializeSetup }
+  MinGWBinDir: string; { Initialized in InitializeSetup }
 
-procedure ExitProcess(uExitCode: Integer);
-  external 'ExitProcess@kernel32.dll stdcall';
+function InitializeSetup: Boolean;
+begin
+  MinGWDir := ExpandConstant('{sd}\MinGW{#Arch}');
+  MinGWBinDir := MinGWDir + '\bin';
+  Result := True;
+end;
 
 procedure UninstallExistingVersion;
 begin
-  if DirExists(ExpandConstant('{sd}') + '\MinGW{#Arch}') then
-  begin
-    DelTree(ExpandConstant('{sd}') + '\MinGW{#Arch}', True, True, True);
-  end;
+  if DirExists(MinGWDir) then
+    DelTree(MinGWDir, True, True, True);
 end;
 
 procedure CheckForExistingInstallation;
-var
-  UserResponse: Integer;
 begin
-  if DirExists(ExpandConstant('{sd}') + '\MinGW{#Arch}') then
+  if DirExists(MinGWDir) then
   begin
-    UserResponse := MsgBox('A version of Easy MinGW Installer is already installed. It will be uninstalled to proceed. Do you want to continue?', mbConfirmation, MB_YESNO);
-    if UserResponse = IDYES then
+    if MsgBox('A version of Easy MinGW Installer is already installed. ' +
+              'It will be uninstalled to proceed. Do you want to continue?',
+              mbConfirmation, MB_YESNO) = IDYES then
     begin
       UninstallExistingVersion;
       SkipInfoPage := True;
     end
     else
-    begin
-      WizardForm.Close;
-      ExitProcess(0);
-    end;
+      Abort; { Cancel installation }
   end;
 end;
 
@@ -121,15 +122,11 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-  begin
-    EnvAddPath(ExpandConstant('{sd}') + '\MinGW{#Arch}\bin');
-  end;
+    EnvAddPath(MinGWBinDir);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
-  begin
-    EnvRemovePath(ExpandConstant('{sd}') + '\MinGW{#Arch}\bin');
-  end;
+    EnvRemovePath(ExpandConstant('{sd}\MinGW{#Arch}\bin'));
 end;

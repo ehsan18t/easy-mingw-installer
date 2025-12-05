@@ -12,8 +12,8 @@ begin
     { Skip if string already found in path }
     if Pos(Uppercase(Path) + ';', Uppercase(Paths)) > 0 then exit;
 
-    { App string to the end of the path variable }
-    Paths := Path + ';' + Paths 
+    { Prepend to the beginning of the path variable }
+    Paths := Path + ';' + Paths;
 
     { Overwrite (or create if missing) path environment variable }
     if RegWriteStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths)
