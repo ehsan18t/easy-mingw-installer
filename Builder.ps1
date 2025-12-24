@@ -329,6 +329,15 @@ try {
 
         Write-StatusInfo -Type 'Target Version' -Message $version
         Write-StatusInfo -Type 'Release Date' -Message $releaseDate
+
+        if ($cfg.IsGitHubActions) {
+            # write file inside tags folder with the name of the version
+            # NOTE: this must live outside $cfg.TempDirectory because temp is cleaned up in finally.
+            $tagsDir = Join-Path -Path $PSScriptRoot -ChildPath 'tags'
+            New-Item -ItemType Directory -Path $tagsDir -Force | Out-Null
+            $versionFilePath = Join-Path -Path $tagsDir -ChildPath $version
+            Set-Content -Path $versionFilePath -Value $version -Encoding utf8 -NoNewline
+        }
     }
 
     # ========================
