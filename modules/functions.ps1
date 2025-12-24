@@ -644,6 +644,12 @@ function New-FallbackChangelog {
         The release version.
     .PARAMETER VersionInfoPath
         Optional path to version_info.txt for package info.
+    .PARAMETER PreviousTag
+        Optional previous release tag for changelog link.
+    .PARAMETER GitHubOwner
+        GitHub repository owner.
+    .PARAMETER GitHubRepo
+        GitHub repository name.
     #>
     [CmdletBinding()]
     param(
@@ -654,30 +660,124 @@ function New-FallbackChangelog {
         [string]$Version,
 
         [Parameter()]
-        [string]$VersionInfoPath
+        [string]$VersionInfoPath,
+
+        [Parameter()]
+        [string]$PreviousTag,
+
+        [Parameter()]
+        [string]$GitHubOwner = 'ehsan18t',
+
+        [Parameter()]
+        [string]$GitHubRepo = 'easy-mingw-installer'
     )
 
     Write-WarningMessage -Type 'Changelog' -Message 'Using fallback template'
 
-    # Extract package info if available
-    $packageInfo = ''
+    $changelogLines = @()
+
+    # Parse version_info.txt to extract all info (matching Python script behavior)
     if ($VersionInfoPath -and (Test-Path $VersionInfoPath)) {
-        $lines = Get-Content $VersionInfoPath | Where-Object { $_ -match '^- ' }
-        if ($lines) {
-            $packageInfo = "## Package Info`n$($lines -join "`n")`n`n"
+        $fileContent = Get-Content $VersionInfoPath -Raw
+        $lines = Get-Content $VersionInfoPath
+
+        $inPackageList = $false
+        $packageLines = @()
+        $threadModel = ''
+        $runtimeLibrary = ''
+        $buildLine = ''
+
+        foreach ($line in $lines) {
+            $lineStrip = $line.Trim()
+
+            # Start of package list
+            if (-not $inPackageList -and $line -match 'This is the winlibs Intel/AMD' -and $line -match 'build of:') {
+                $inPackageList = $true
+                continue
+            }
+
+            if ($inPackageList) {
+                if ($lineStrip -match '^- ') {
+                    $packageLines += $lineStrip
+                }
+                elseif ($lineStrip -match '^Thread model:' -or
+                        $lineStrip -match '^Runtime library:' -or
+                        ($line -match 'This build was compiled with GCC' -and $line -match 'and packaged on')) {
+                    $inPackageList = $false
+                }
+            }
+
+            # Extract thread model
+            if ($lineStrip -match '^Thread model:\s*(.+)$') {
+                $threadModel = $Matches[1].Trim()
+                if ($threadModel.ToLower() -eq 'posix') { $threadModel = 'POSIX' }
+            }
+
+            # Extract runtime library
+            if ($lineStrip -match '^Runtime library:\s*(.+)$') {
+                $runtimeLibrary = $Matches[1].Trim()
+            }
+
+            # Extract build line (with quirky dot handling matching old Python script)
+            if ($line -match 'This build was compiled with GCC' -and $line -match 'and packaged on') {
+                if ($lineStrip.EndsWith('.')) {
+                    # Remove FIRST dot only if line ends with dot (legacy quirky behavior)
+                    $buildLine = $lineStrip -replace '\.', '', 1
+                } else {
+                    $buildLine = $lineStrip
+                }
+            }
+        }
+
+        # Build Package Info section
+        $changelogLines += '## Package Info'
+        $changelogLines += 'This is the winlibs Intel/AMD 64-bit & 32-bit standalone build of:'
+        $changelogLines += $packageLines
+        $changelogLines += ''
+
+        if ($threadModel) {
+            $changelogLines += "<strong>Thread model:</strong> $threadModel"
+            $changelogLines += ''
+            $changelogLines += '<br>'
+            $changelogLines += ''
+        }
+
+        if ($runtimeLibrary) {
+            $changelogLines += "<strong>Runtime library:</strong> $runtimeLibrary<br>"
+            $changelogLines += ''
+        }
+
+        if ($buildLine) {
+            $changelogLines += "> $buildLine"
+            $changelogLines += ''
         }
     }
 
-    $changelogContent = @"
-# Release $Version
+    # Script/Installer Changelogs section
+    $changelogLines += '## Script/Installer Changelogs'
+    $changelogLines += '* None'
+    $changelogLines += ''
 
-$packageInfo## Changelog
-* No automated changelog available
+    # Package Changelogs section
+    $changelogLines += '## Package Changelogs'
+    $changelogLines += "* Could not retrieve or parse previous version's package list; all current packages are listed as new if any."
+    $changelogLines += ''
 
-### File Hash
-"@
+    # Full Changelog link
+    $changelogLines += '<br>'
+    $changelogLines += ''
+    if ($PreviousTag -and $Version) {
+        $changelogLines += "**Full Changelog**: https://github.com/$GitHubOwner/$GitHubRepo/compare/$PreviousTag...$Version"
+    } else {
+        $changelogLines += '**Full Changelog**: [TODO: Update link - Previous project tag missing]'
+    }
+    $changelogLines += ''
+    $changelogLines += '<br>'
+    $changelogLines += ''
+    $changelogLines += '### File Hash'
 
-    Set-Content -Path $OutputPath -Value $changelogContent -Encoding UTF8
+    $changelogContent = $changelogLines -join "`n"
+    Set-Content -Path $OutputPath -Value $changelogContent -Encoding UTF8 -NoNewline
     return $true
 }
 
@@ -722,78 +822,82 @@ function Invoke-ChangelogGeneration {
         return $true
     }
 
-    # Fallback if no version info and no CurrentTag
+    # Require version info or CurrentTag
     if (-not $CurrentTag -and -not (Test-Path $VersionInfoPath)) {
-        return New-FallbackChangelog -OutputPath $OutputPath -Version $Version
+        Write-ErrorMessage -ErrorType 'Changelog' -Message "Version info file not found: $VersionInfoPath"
+        return $false
     }
 
-    # Try Python script
+    # Require Python script
     $pyScript = Join-Path $PSScriptRoot 'generate_changelog.py'
     if (-not (Test-Path $pyScript)) {
-        return New-FallbackChangelog -OutputPath $OutputPath -Version $Version -VersionInfoPath $VersionInfoPath
+        Write-ErrorMessage -ErrorType 'Changelog' -Message "Python script not found: $pyScript"
+        return $false
     }
 
-    try {
-        # Check if Python is available
-        $null = & python --version 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Python not available'
-        }
-
-        $cfg = Get-BuildConfig
-
-        $pyArgs = @(
-            $pyScript
-            '--output-file', $OutputPath
-            '--current-build-tag', $Version
-            '--github-owner', $cfg.ProjectOwner
-            '--github-repo', $cfg.ProjectRepo
-        )
-        
-        # Only add prev-tag if we have a valid one (not empty/null)
-        if ($PreviousTag) {
-            $pyArgs += '--prev-tag', $PreviousTag
-        }
-
-        # Use CurrentTag to fetch from GitHub, otherwise use local file
-        if ($CurrentTag) {
-            $pyArgs += '--current-tag', $CurrentTag
-            Write-VerboseLog "Fetching current package info from GitHub tag: $CurrentTag"
-        }
-        else {
-            $pyArgs += '--input-file', $VersionInfoPath
-        }
-
-        # Start Python process with tracking for cancellation
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = 'python'
-        $processInfo.Arguments = ($pyArgs | ForEach-Object { 
-            if ($_ -match '\s') { "`"$_`"" } else { $_ } 
-        }) -join ' '
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $true
-
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $processInfo
-        $process.Start() | Out-Null
-        Register-ChildProcess -Process $process
-        
-        # Poll for exit to allow Ctrl+C handling
-        while (-not $process.HasExited) {
-            $process.WaitForExit(500)
-        }
-
-        if ($process.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
-            Write-SuccessMessage -Type 'Changelog' -Message 'Generated successfully'
-            return $true
-        }
-    }
-    catch {
-        Write-VerboseLog "Python changelog generation failed: $($_.Exception.Message)"
+    # Check if Python is available
+    $null = & python --version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-ErrorMessage -ErrorType 'Changelog' -Message 'Python is not available'
+        return $false
     }
 
-    # Fall back if Python failed
-    return New-FallbackChangelog -OutputPath $OutputPath -Version $Version -VersionInfoPath $VersionInfoPath
+    $cfg = Get-BuildConfig
+
+    $pyArgs = @(
+        $pyScript
+        '--output-file', $OutputPath
+        '--current-build-tag', $Version
+        '--github-owner', $cfg.ProjectOwner
+        '--github-repo', $cfg.ProjectRepo
+    )
+    
+    # Only add prev-tag if we have a valid one (not empty/null)
+    if ($PreviousTag) {
+        $pyArgs += '--prev-tag', $PreviousTag
+    }
+
+    # Use CurrentTag to fetch from GitHub, otherwise use local file
+    if ($CurrentTag) {
+        $pyArgs += '--current-tag', $CurrentTag
+        Write-VerboseLog "Fetching current package info from GitHub tag: $CurrentTag"
+    }
+    else {
+        $pyArgs += '--input-file', $VersionInfoPath
+    }
+
+    # Start Python process with tracking for cancellation
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = 'python'
+    $processInfo.Arguments = ($pyArgs | ForEach-Object { 
+        if ($_ -match '\s') { "`"$_`"" } else { $_ } 
+    }) -join ' '
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
+    $processInfo.RedirectStandardError = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $processInfo
+    $process.Start() | Out-Null
+    Register-ChildProcess -Process $process
+    
+    # Poll for exit to allow Ctrl+C handling
+    while (-not $process.HasExited) {
+        $process.WaitForExit(500)
+    }
+
+    if ($process.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
+        Write-SuccessMessage -Type 'Changelog' -Message 'Generated successfully'
+        return $true
+    }
+
+    # Python failed - report error and fail
+    $stderr = $process.StandardError.ReadToEnd()
+    Write-ErrorMessage -ErrorType 'Changelog' -Message "Python script failed with exit code $($process.ExitCode)"
+    if ($stderr) {
+        Write-VerboseLog "Python stderr: $stderr"
+    }
+    return $false
 }
 
 # ============================================================================
