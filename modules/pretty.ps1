@@ -1,3 +1,99 @@
+<#
+.SYNOPSIS
+    Logging and formatted output module for Easy MinGW Installer.
+
+.DESCRIPTION
+    This module provides consistent, colored console output throughout the build
+    process. It handles both local terminal output and GitHub Actions workflow
+    integration with proper annotations.
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    OUTPUT FORMATTING CONVENTIONS
+    ═══════════════════════════════════════════════════════════════════════════════
+    
+    All output follows a consistent format: INDICATOR TYPE: MESSAGE
+    
+    ┌──────────────┬────────────┬─────────────────────────────────────────────────┐
+    │  Indicator   │  Function  │  Purpose                                        │
+    ├──────────────┼────────────┼─────────────────────────────────────────────────┤
+    │  ->          │ LogEntry   │ General log messages (blue indicator)           │
+    │  >>          │ StatusInfo │ Status/progress updates (magenta indicator)     │
+    │  ++          │ Success    │ Successful operations (green indicator)         │
+    │  !!          │ Warning    │ Warnings and cautions (red indicator)           │
+    │  **          │ Error      │ Error messages (dark red indicator)             │
+    └──────────────┴────────────┴─────────────────────────────────────────────────┘
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    FUNCTION CATEGORIES
+    ═══════════════════════════════════════════════════════════════════════════════
+    
+    BASIC OUTPUT:
+    - Write-ColoredHost      : Write text with specified foreground color
+    - Write-FormattedLine    : Write indicator + type + message format
+    - Write-SeparatorLine    : Write horizontal separator (----)
+    
+    MESSAGE TYPES:
+    - Write-LogEntry         : Standard log message (-> Type: Message)
+    - Write-StatusInfo       : Status/progress (>> Type: Message)
+    - Write-SuccessMessage   : Success notification (++ Type: Message)
+    - Write-WarningMessage   : Warning notification (!! Type: Message)
+    - Write-ErrorMessage     : Error notification (** Type: Message)
+    - Write-ActionProgress   : Progress for ongoing action
+    
+    DYNAMIC OUTPUT:
+    - Write-UpdatingLine     : Updates current line (for progress display)
+    - End-UpdatingLine       : Ends an updating line with newline
+    
+    GITHUB ACTIONS INTEGRATION:
+    - Write-GitHubActionsGroup   : Start/end collapsible log groups
+    - Write-GitHubActionsError   : Write error annotation
+    - Write-GitHubActionsWarning : Write warning annotation
+    
+    BUILD INFORMATION:
+    - Write-BuildHeader      : Display script banner/title
+    - Write-BuildInfo        : Display build configuration summary
+    - Write-BuildInfoLine    : Single line in build info display
+    - Write-BuildSummary     : Final build status summary
+    
+    VERBOSE/DEBUG (respects LogLevel):
+    - Write-VerboseLog       : Only shown when LogLevel is 'Verbose'
+    - Write-DebugLog         : Debug info (only in Verbose mode)
+    - Test-ShouldLog         : Check if logging should occur
+
+.NOTES
+    File Name      : pretty.ps1
+    Location       : modules/pretty.ps1
+    
+    SCRIPT-SCOPED VARIABLES:
+    - $script:colors         : Hashtable mapping color names to ConsoleColor
+    - $script:IsGitHubActions: Boolean, true when running in GitHub Actions
+    
+    GITHUB ACTIONS DETECTION:
+    The module automatically detects GitHub Actions environment via
+    $env:GITHUB_ACTIONS and adjusts output accordingly:
+    - Uses workflow command syntax (::group::, ::error::, etc.)
+    - Disables carriage return updates (no console refresh)
+
+.EXAMPLE
+    # Basic usage
+    Write-StatusInfo -Type 'Download' -Message 'Starting file download...'
+    Write-SuccessMessage -Type 'Downloaded' -Message 'file.zip (15.2 MB)'
+    Write-ErrorMessage -ErrorType 'FATAL' -Message 'Build failed'
+    
+.EXAMPLE
+    # Progress with updating line
+    for ($i = 1; $i -le 100; $i++) {
+        Write-UpdatingLine -Text "Progress: $i%"
+        Start-Sleep -Milliseconds 50
+    }
+    End-UpdatingLine
+    
+.EXAMPLE
+    # Build summary
+    Write-BuildSummary -Success $true -Version '2024.01.15' `
+        -Architectures @('64', '32') -OutputPath './output'
+#>
+
 # ============================================================================
 # Easy MinGW Installer - Logging & Output Module
 # ============================================================================

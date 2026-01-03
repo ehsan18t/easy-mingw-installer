@@ -1,3 +1,69 @@
+<#
+.SYNOPSIS
+    Centralized configuration module for Easy MinGW Installer build system.
+
+.DESCRIPTION
+    This module provides a single source of truth for all configurable settings
+    used throughout the build process. It implements a layered configuration
+    approach:
+    
+    CONFIGURATION HIERARCHY (highest to lowest priority):
+    1. Runtime parameter overrides (passed to Initialize-BuildConfig)
+    2. Environment variables (prefixed with EMI_)
+    3. Default values defined in this module
+    
+    KEY CONCEPTS:
+    
+    - LAZY INITIALIZATION: The configuration object is created on first access
+      via Get-BuildConfig and cached for subsequent calls.
+    
+    - ENVIRONMENT OVERRIDES: Most settings can be overridden via environment
+      variables prefixed with EMI_ (e.g., EMI_LOG_LEVEL, EMI_7ZIP_PATH).
+    
+    - TOOL AUTO-DETECTION: 7-Zip and Inno Setup paths are automatically
+      discovered from common Program Files locations.
+    
+    - MODE FLAGS: Various flags control build behavior:
+      * IsTestMode - Uses mock data instead of real downloads
+      * OfflineMode - Skips all network requests
+      * SkipDownload, SkipBuild, SkipChangelog, SkipHashes - Granular control
+    
+    USAGE:
+    
+    1. Call Initialize-BuildConfig once at script startup with any overrides
+    2. Use Get-BuildConfig throughout the codebase to access settings
+    3. Use Reset-BuildConfig for testing (clears cached config)
+
+.NOTES
+    File Name      : config.ps1
+    Location       : modules/config.ps1
+    
+    EXPORTED FUNCTIONS:
+    - Get-BuildConfig        : Returns the configuration object
+    - Initialize-BuildConfig : Initializes config with runtime overrides
+    - Test-BuildDependencies : Validates required tools are available
+    - Reset-BuildConfig      : Clears cached config (for testing)
+    
+    INTERNAL FUNCTIONS:
+    - Get-EnvOrDefault       : Gets env var or returns default
+    - Find-Tool              : Searches Program Files for a tool
+    - Find-SevenZip          : Locates 7-Zip executable
+    - Find-InnoSetup         : Locates Inno Setup compiler
+
+.EXAMPLE
+    # Basic usage in a script
+    . "$PSScriptRoot\modules\config.ps1"
+    Initialize-BuildConfig -Overrides @{ IsTestMode = $true }
+    $cfg = Get-BuildConfig
+    Write-Host "Using 7-Zip at: $($cfg.SevenZipPath)"
+
+.EXAMPLE
+    # Environment variable override
+    $env:EMI_LOG_LEVEL = 'Verbose'
+    $env:EMI_7ZIP_PATH = 'D:\Tools\7-Zip\7z.exe'
+    $cfg = Get-BuildConfig
+#>
+
 # ============================================================================
 # Easy MinGW Installer - Configuration Module
 # ============================================================================
@@ -118,11 +184,66 @@ function Get-BuildConfig {
     <#
     .SYNOPSIS
         Returns the centralized build configuration object.
+    
     .DESCRIPTION
         Creates and caches a configuration object with all build settings.
         Values can be overridden via environment variables prefixed with EMI_.
+        
+        The returned object contains the following property groups:
+        
+        REPOSITORY SETTINGS:
+        - ProjectOwner    : GitHub owner of this project (ehsan18t)
+        - ProjectRepo     : This repository name (easy-mingw-installer)
+        - WinLibsOwner    : WinLibs GitHub owner (brechtsanders)
+        - WinLibsRepo     : WinLibs repository name (winlibs_mingw)
+        
+        BUILD NAMING:
+        - InstallerName     : Display name in installer UI
+        - InstallerBaseName : Base filename for output files
+        
+        TOOL PATHS:
+        - SevenZipPath   : Path to 7z.exe (auto-detected or override)
+        - InnoSetupPath  : Path to ISCC.exe (auto-detected or override)
+        
+        DIRECTORIES:
+        - TempDirectory  : Temp folder for downloads and extraction
+        
+        API SETTINGS:
+        - GitHubApiBase         : GitHub API URL
+        - GitHubUserAgent       : User agent for API requests
+        - ApiTimeoutSeconds     : Request timeout
+        - ApiMaxRetries         : Max retry attempts
+        - ApiRetryDelaySeconds  : Delay between retries
+        
+        DOWNLOAD SETTINGS:
+        - DownloadRetries            : Max download retry attempts
+        - DownloadRetryDelaySeconds  : Delay between download retries
+        - DownloadBufferSize         : Buffer size for progress updates
+        
+        LOGGING:
+        - LogLevel : Verbosity level (Verbose, Normal, Quiet)
+        
+        RUNTIME STATE (set via Initialize-BuildConfig):
+        - IsGitHubActions    : True if running in GitHub Actions
+        - IsTestMode         : True if using mock data
+        - ValidateAssets     : Validate real assets in test mode
+        - GenerateChangelog  : Generate real changelog in test mode
+        - OfflineMode        : Skip all network requests
+        - CleanFirst         : Clean temp before starting
+        - SkipDownload       : Skip download phase
+        - SkipBuild          : Skip Inno Setup compilation
+        - SkipChangelog      : Skip changelog generation
+        - SkipHashes         : Skip hash generation
+        - GenerateLogsAlways : Always write Inno Setup logs
+    
     .OUTPUTS
         PSCustomObject with all configuration properties.
+    
+    .EXAMPLE
+        $cfg = Get-BuildConfig
+        if ($cfg.IsTestMode) {
+            Write-Host "Running in test mode"
+        }
     #>
     [CmdletBinding()]
     [OutputType([PSCustomObject])]
@@ -217,11 +338,57 @@ function Initialize-BuildConfig {
     <#
     .SYNOPSIS
         Initializes the build configuration with runtime overrides.
+    
     .DESCRIPTION
         Should be called once at script startup to configure tool paths
         and runtime flags based on parameters and environment.
+        
+        This function performs the following:
+        
+        1. TOOL DETECTION
+           Finds 7-Zip and Inno Setup executables in order of priority:
+           - Parameter override (in $Overrides hashtable)
+           - Environment variable (EMI_7ZIP_PATH, EMI_INNOSETUP_PATH)
+           - Auto-detection from Program Files
+        
+        2. MODE FLAG CONFIGURATION
+           Sets runtime flags based on overrides:
+           - IsTestMode implies SkipDownload and SkipChangelog
+           - OfflineMode implies SkipDownload and SkipChangelog
+           - GenerateChangelog overrides SkipChangelog
+        
+        3. SKIP FLAG PROCESSING
+           Allows granular control over build steps via:
+           - SkipDownload, SkipBuild, SkipChangelog, SkipHashes
+    
     .PARAMETER Overrides
-        Hashtable of property overrides (e.g., @{ IsTestMode = $true }).
+        Hashtable of property overrides. Supported keys:
+        - SevenZipPath      : Custom 7-Zip path
+        - InnoSetupPath     : Custom Inno Setup path
+        - IsTestMode        : Enable test mode
+        - OfflineMode       : Enable offline mode
+        - CleanFirst        : Clean temp directory first
+        - ValidateAssets    : Validate assets in test mode
+        - GenerateChangelog : Generate changelog in test mode
+        - SkipDownload      : Skip download phase
+        - SkipBuild         : Skip build phase
+        - SkipChangelog     : Skip changelog generation
+        - SkipHashes        : Skip hash generation
+        - GenerateLogsAlways: Always generate build logs
+        - LogLevel          : Override log verbosity
+    
+    .EXAMPLE
+        Initialize-BuildConfig -Overrides @{
+            IsTestMode = $true
+            ValidateAssets = $true
+        }
+    
+    .EXAMPLE
+        # Override tool paths
+        Initialize-BuildConfig -Overrides @{
+            SevenZipPath = 'D:\Tools\7z.exe'
+            InnoSetupPath = 'D:\Tools\ISCC.exe'
+        }
     #>
     [CmdletBinding()]
     param(
@@ -314,8 +481,33 @@ function Test-BuildDependencies {
     <#
     .SYNOPSIS
         Validates that required build tools are available.
+    
+    .DESCRIPTION
+        Checks that all required external tools are present and accessible:
+        
+        ALWAYS REQUIRED:
+        - 7-Zip (7z.exe) - For extracting MinGW archives
+        
+        REQUIRED UNLESS SkipBuild:
+        - Inno Setup (ISCC.exe) - For building Windows installers
+        
+        The function checks both the configured path and that the file exists.
+        If a tool is missing, an appropriate error message is added to the
+        Errors array with installation instructions.
+    
     .OUTPUTS
-        Hashtable with Success (bool) and Errors (string[]).
+        Hashtable with:
+        - Success : [bool] True if all dependencies are met
+        - Errors  : [string[]] Array of error messages for missing tools
+    
+    .EXAMPLE
+        $result = Test-BuildDependencies
+        if (-not $result.Success) {
+            foreach ($err in $result.Errors) {
+                Write-Error $err
+            }
+            exit 1
+        }
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]

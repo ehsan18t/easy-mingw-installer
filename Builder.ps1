@@ -1,18 +1,141 @@
+<#
+.SYNOPSIS
+    Main build script for Easy MinGW Installer - downloads WinLibs MinGW packages
+    and creates Windows installers with Inno Setup.
+
+.DESCRIPTION
+    This is the entry point for building Easy MinGW Installer packages. The script:
+    
+    1. INITIALIZATION
+       - Loads configuration from modules/config.ps1
+       - Loads helper functions from modules/functions.ps1 and modules/pretty.ps1
+       - Validates dependencies (7-Zip, Inno Setup)
+    
+    2. VERSION RESOLUTION
+       - Fetches latest WinLibs release matching the specified pattern
+       - Compares against the project's latest tag to detect new versions
+       - In test mode, uses mock data or validates real assets
+    
+    3. BUILD PROCESS (per architecture)
+       - Downloads the MinGW archive from GitHub releases
+       - Extracts using 7-Zip to a temp directory
+       - Generates changelog from version_info.txt
+       - Builds installer using Inno Setup
+       - Generates file hashes (SHA256, MD5, etc.)
+    
+    4. POST-BUILD
+       - Appends file hashes to the release notes
+       - Cleans up temporary files
+       - Displays build summary
+
+    The script supports multiple modes:
+    - NORMAL MODE: Full build with downloads, compilation, and output
+    - TEST MODE: Uses mock fixtures for rapid pipeline testing
+    - OFFLINE MODE: Skips network requests, uses existing files
+    - CI MODE: Automatically detected in GitHub Actions environment
+
+.PARAMETER TitlePattern
+    Wildcard pattern to match WinLibs release titles (e.g., "*UCRT*POSIX*").
+    This filters which GitHub release to use as the source.
+
+.PARAMETER Archs
+    Array of architectures to build: "64", "32", or both @("64", "32").
+    Each architecture produces a separate installer.
+
+.PARAMETER NamePatterns
+    Regex patterns to match asset filenames for each architecture.
+    Must have the same count as -Archs parameter.
+
+.PARAMETER OutputPath
+    Directory for built installers and hash files. Defaults to ./output.
+
+.PARAMETER SevenZipPath
+    Path to 7z.exe. Auto-detected if not specified.
+    Can also be set via EMI_7ZIP_PATH environment variable.
+
+.PARAMETER InnoSetupPath
+    Path to ISCC.exe (Inno Setup Compiler). Auto-detected if not specified.
+    Can also be set via EMI_INNOSETUP_PATH environment variable.
+
+.PARAMETER TestMode
+    Enables test mode: uses mock data and test fixtures instead of real downloads.
+    Useful for testing the build pipeline without network access.
+
+.PARAMETER ValidateAssets
+    When used with -TestMode, validates that release assets exist via API
+    before proceeding with test fixtures.
+
+.PARAMETER GenerateChangelog
+    When used with -TestMode, fetches real release data to generate
+    an actual changelog instead of a test placeholder.
+
+.PARAMETER OfflineMode
+    Skips all network requests. Use with existing downloaded files.
+
+.PARAMETER CleanFirst
+    Removes the temp directory before starting the build.
+
+.PARAMETER CheckNewRelease
+    Compares WinLibs version against project's latest tag.
+    Skips build if versions match (already up-to-date).
+
+.PARAMETER SkipDownload
+    Skips downloading MinGW archives. Use existing files in temp.
+
+.PARAMETER SkipBuild
+    Skips the Inno Setup compilation step.
+
+.PARAMETER SkipChangelog
+    Skips changelog generation.
+
+.PARAMETER SkipHashes
+    Skips generating and appending file hashes.
+
+.PARAMETER GenerateLogsAlways
+    Always generates Inno Setup build logs, not just on errors.
+
+.EXAMPLE
+    .\Builder.ps1
+    # Standard build: 64-bit UCRT/POSIX installer
+
+.EXAMPLE
+    .\Builder.ps1 -Archs "64","32"
+    # Build both 64-bit and 32-bit installers
+
+.EXAMPLE
+    .\Builder.ps1 -TestMode
+    # Test the build pipeline with mock data
+
+.EXAMPLE
+    .\Builder.ps1 -TestMode -ValidateAssets -GenerateChangelog
+    # Test mode but validate real assets and generate real changelog
+
+.EXAMPLE
+    .\Builder.ps1 -CheckNewRelease
+    # Only build if WinLibs has a newer version than our latest release
+
+.NOTES
+    File Name      : Builder.ps1
+    Prerequisite   : PowerShell 5.1+, 7-Zip, Inno Setup 5/6
+    
+    Environment Variables:
+        EMI_LOG_LEVEL      - Logging verbosity: Verbose, Normal, Quiet
+        EMI_7ZIP_PATH      - Custom 7-Zip executable path
+        EMI_INNOSETUP_PATH - Custom Inno Setup compiler path
+        EMI_PROJECT_OWNER  - GitHub owner for this project (default: ehsan18t)
+        EMI_PROJECT_REPO   - GitHub repo name (default: easy-mingw-installer)
+        EMI_WINLIBS_OWNER  - WinLibs GitHub owner (default: brechtsanders)
+        EMI_WINLIBS_REPO   - WinLibs repo name (default: winlibs_mingw)
+
+.LINK
+    https://github.com/ehsan18t/easy-mingw-installer
+
+.LINK
+    https://github.com/brechtsanders/winlibs_mingw
+#>
+
 # ============================================================================
 # Easy MinGW Installer - Main Build Script
-# ============================================================================
-# Entry point for building Easy MinGW Installer packages.
-# Supports normal mode and test mode with granular control flags.
-#
-# Usage:
-#   .\Builder.ps1 -TestMode                    # Test build
-#   .\Builder.ps1 -Archs "64","32"             # Build both architectures
-#   .\Builder.ps1 -CheckNewRelease             # Skip if already at latest
-#
-# Environment Variables:
-#   EMI_LOG_LEVEL    - Logging verbosity: Verbose, Normal, Quiet
-#   EMI_7ZIP_PATH    - Custom 7-Zip path
-#   EMI_INNOSETUP_PATH - Custom Inno Setup path
 # ============================================================================
 
 [CmdletBinding()]

@@ -1,3 +1,95 @@
+<#
+.SYNOPSIS
+    Core functions module for Easy MinGW Installer build system.
+
+.DESCRIPTION
+    This module contains all business logic for the build process. It is organized
+    into the following functional areas:
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    PROCESS MANAGEMENT
+    ═══════════════════════════════════════════════════════════════════════════════
+    Functions for managing child processes during builds, enabling graceful
+    cancellation when Ctrl+C is pressed.
+    
+    - Register-ChildProcess    : Tracks a spawned process for cleanup
+    - Stop-AllChildProcesses   : Kills all tracked processes on cancellation
+    - Clear-ChildProcesses     : Clears tracking list after normal completion
+    - Test-BuildCancelled      : Checks if build was cancelled
+    - Set-BuildCancelled       : Marks build as cancelled
+    - Invoke-CancellationCleanup : Performs full cleanup on Ctrl+C
+    - Wait-ProcessWithCleanup  : Waits for process with Ctrl+C support
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    GITHUB API FUNCTIONS
+    ═══════════════════════════════════════════════════════════════════════════════
+    Functions for interacting with GitHub's REST API to fetch release information.
+    Includes caching to avoid duplicate requests.
+    
+    - Invoke-GitHubApi         : Makes cached API requests with error handling
+    - Get-LatestGitHubTag      : Gets the most recent tag from a repository
+    - Get-GitHubTags           : Gets multiple tags for changelog comparison
+    - Find-GitHubRelease       : Finds a release matching a title pattern
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    DOWNLOAD & EXTRACTION FUNCTIONS
+    ═══════════════════════════════════════════════════════════════════════════════
+    Functions for downloading files with progress display and extracting archives.
+    
+    - Invoke-FileDownload      : Downloads a file with retry logic and progress
+    - Expand-7ZipArchive       : Extracts archives using 7-Zip
+    - Format-FileSize          : Formats bytes to human-readable string
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    TEST MODE FUNCTIONS
+    ═══════════════════════════════════════════════════════════════════════════════
+    Functions for creating test fixtures when running in test mode.
+    
+    - New-TestFixtures         : Creates minimal directory structure for testing
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    CHANGELOG FUNCTIONS
+    ═══════════════════════════════════════════════════════════════════════════════
+    Functions for generating release changelogs from package information.
+    
+    - New-FallbackChangelog    : Creates basic changelog without Python
+    - Invoke-ChangelogGeneration : Runs Python changelog generator
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    BUILD FUNCTIONS
+    ═══════════════════════════════════════════════════════════════════════════════
+    Functions for building installers and generating file hashes.
+    
+    - Invoke-InstallerBuild    : Runs Inno Setup to create installer
+    - Invoke-HashGeneration    : Generates file hashes using 7-Zip
+    - Add-HashesToChangelog    : Appends hash blocks to release notes
+    
+    ═══════════════════════════════════════════════════════════════════════════════
+    MAIN BUILD PIPELINE
+    ═══════════════════════════════════════════════════════════════════════════════
+    The main orchestration function that coordinates the entire build for an
+    architecture.
+    
+    - Invoke-ArchitectureBuild : Complete build pipeline for one architecture
+
+.NOTES
+    File Name      : functions.ps1
+    Location       : modules/functions.ps1
+    Dependencies   : modules/config.ps1, modules/pretty.ps1
+    
+    SCRIPT-SCOPED VARIABLES:
+    - $script:ApiCache       : Hashtable caching GitHub API responses
+    - $script:ChildProcesses : ArrayList tracking spawned processes
+    - $script:BuildCancelled : Boolean flag for cancellation state
+
+.EXAMPLE
+    # Functions are loaded via dot-sourcing in Builder.ps1:
+    . "$PSScriptRoot\modules\functions.ps1"
+    
+    # Then used throughout the build:
+    $release = Find-GitHubRelease -Owner 'brechtsanders' -Repo 'winlibs_mingw' -TitlePattern '*UCRT*POSIX*'
+#>
+
 # ============================================================================
 # Easy MinGW Installer - Core Functions Module
 # ============================================================================
@@ -89,7 +181,43 @@ function Set-BuildCancelled {
 function Invoke-CancellationCleanup {
     <#
     .SYNOPSIS
-        Performs cleanup when build is cancelled - kills processes and removes outputs.
+        Performs comprehensive cleanup when build is cancelled via Ctrl+C.
+    
+    .DESCRIPTION
+        This function is called when the user interrupts the build with Ctrl+C.
+        It performs a thorough cleanup to leave the system in a clean state:
+        
+        CLEANUP SEQUENCE:
+        1. Terminates all tracked child processes (7-Zip, Inno Setup, Python)
+        2. Removes the temporary directory with downloaded/extracted files
+        3. Removes the output directory with partial installer builds
+        4. Removes the changelog file if it was being generated
+        5. Removes any .log files created in the script root
+        6. Displays a cancellation summary with elapsed time
+        
+        This ensures no partial or corrupted files are left behind after
+        an interrupted build.
+    
+    .PARAMETER TempDirectory
+        Path to the temporary build directory (e.g., %TEMP%\EasyMinGW_Build).
+        Contains downloaded archives and extracted MinGW files.
+    
+    .PARAMETER OutputDirectory
+        Path to the output directory (e.g., ./output).
+        Contains built installers and hash files.
+    
+    .PARAMETER ChangelogPath
+        Path to the release notes markdown file (e.g., ./release_notes_body.md).
+    
+    .PARAMETER StartTime
+        The DateTime when the build started. Used to calculate total duration.
+    
+    .EXAMPLE
+        Invoke-CancellationCleanup `
+            -TempDirectory 'C:\Temp\EasyMinGW_Build' `
+            -OutputDirectory '.\output' `
+            -ChangelogPath '.\release_notes_body.md' `
+            -StartTime $buildStartTime
     #>
     [CmdletBinding()]
     param(
@@ -223,11 +351,44 @@ function Wait-ProcessWithCleanup {
 function Invoke-GitHubApi {
     <#
     .SYNOPSIS
-        Makes a request to the GitHub API with caching and error handling.
+        Makes a request to the GitHub REST API with caching and error handling.
+    
+    .DESCRIPTION
+        Central function for all GitHub API interactions. Provides:
+        
+        FEATURES:
+        - Response caching: Identical requests return cached results
+        - Configurable timeout: Uses ApiTimeoutSeconds from config
+        - Proper headers: Sets User-Agent and Accept headers for GitHub API v3
+        - Error handling: Catches exceptions and returns $null on failure
+        - Verbose logging: Logs requests and cache hits when in Verbose mode
+        
+        CACHING BEHAVIOR:
+        The function maintains a script-scoped cache ($script:ApiCache) that
+        stores successful responses keyed by URI. This prevents duplicate
+        requests when the same endpoint is called multiple times (e.g., when
+        building both 64-bit and 32-bit architectures).
+        
+        The cache persists for the duration of the script execution and is
+        not persisted to disk.
+    
     .PARAMETER Uri
-        The full API endpoint URL.
+        The full GitHub API endpoint URL.
+        Examples:
+        - https://api.github.com/repos/owner/repo/releases
+        - https://api.github.com/repos/owner/repo/tags
+    
     .OUTPUTS
-        The API response object, or $null on failure.
+        [PSCustomObject] The deserialized JSON response from the API.
+        [null] If the request fails or times out.
+    
+    .EXAMPLE
+        # Get all releases for a repository
+        $releases = Invoke-GitHubApi 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases'
+    
+    .EXAMPLE
+        # Get all tags for a repository
+        $tags = Invoke-GitHubApi "$($cfg.GitHubApiBase)/repos/$Owner/$Repo/tags"
     #>
     [CmdletBinding()]
     param(
@@ -266,13 +427,39 @@ function Invoke-GitHubApi {
 function Get-LatestGitHubTag {
     <#
     .SYNOPSIS
-        Gets the latest tag from a GitHub repository.
+        Gets the most recent tag from a GitHub repository.
+    
+    .DESCRIPTION
+        Fetches the tags list from a GitHub repository and returns the
+        name of the most recent tag. This is used to:
+        
+        1. Get the current project version for -CheckNewRelease comparison
+        2. Determine the previous version for changelog generation
+        
+        BEHAVIOR:
+        - Calls the GitHub API: /repos/{owner}/{repo}/tags
+        - Returns the first tag in the list (most recent by default)
+        - Uses API caching from Invoke-GitHubApi
+        - Returns $null if no tags exist or API fails
+    
     .PARAMETER Owner
-        Repository owner (username or organization).
+        The GitHub username or organization that owns the repository.
+        Example: 'ehsan18t'
+    
     .PARAMETER Repo
-        Repository name.
+        The repository name.
+        Example: 'easy-mingw-installer'
+    
     .OUTPUTS
-        The tag name string, or $null if not found.
+        [string] The tag name (e.g., '2024.01.15').
+        [null] If no tags found or API error.
+    
+    .EXAMPLE
+        # Check if we need to build
+        $currentTag = Get-LatestGitHubTag -Owner 'ehsan18t' -Repo 'easy-mingw-installer'
+        if ($currentTag -eq $newVersion) {
+            Write-Host "Already up to date"
+        }
     #>
     [CmdletBinding()]
     param(
@@ -299,15 +486,41 @@ function Get-LatestGitHubTag {
 function Get-GitHubTags {
     <#
     .SYNOPSIS
-        Gets multiple tags from a GitHub repository.
+        Gets multiple recent tags from a GitHub repository.
+    
+    .DESCRIPTION
+        Fetches the tags list from a GitHub repository and returns
+        the specified number of most recent tags. Primarily used for
+        changelog generation where we need both current and previous tags.
+        
+        USE CASE:
+        When generating a changelog in test mode with -GenerateChangelog,
+        we need to know:
+        - Current tag: The version we're "building"
+        - Previous tag: The last released version for comparison
+        
+        This function returns both in a single API call.
+    
     .PARAMETER Owner
-        Repository owner (username or organization).
+        The GitHub username or organization that owns the repository.
+        Example: 'ehsan18t'
+    
     .PARAMETER Repo
-        Repository name.
+        The repository name.
+        Example: 'easy-mingw-installer'
+    
     .PARAMETER Count
-        Number of tags to return (default: 2).
+        Number of tags to return. Default is 2 (current + previous).
+    
     .OUTPUTS
-        Array of tag name strings.
+        [string[]] Array of tag names, newest first.
+        Example: @('2024.01.15', '2024.01.01')
+    
+    .EXAMPLE
+        # Get current and previous tags for changelog
+        $tags = Get-GitHubTags -Owner 'ehsan18t' -Repo 'easy-mingw-installer' -Count 2
+        $currentTag = $tags[0]   # '2024.01.15'
+        $previousTag = $tags[1]  # '2024.01.01'
     #>
     [CmdletBinding()]
     param(
@@ -338,17 +551,62 @@ function Find-GitHubRelease {
     <#
     .SYNOPSIS
         Finds a GitHub release matching a title pattern.
+    
     .DESCRIPTION
-        Searches releases for a match, excluding prereleases,
-        and returns the most recently published match.
+        Searches through a repository's releases to find one matching
+        the specified wildcard pattern. This is used to find the correct
+        WinLibs release based on configuration (UCRT/MSVCRT, POSIX/Win32, etc.).
+        
+        SEARCH BEHAVIOR:
+        1. Fetches all releases from the repository via GitHub API
+        2. Filters releases by title using the wildcard pattern
+        3. Excludes pre-release versions (draft or beta releases)
+        4. Sorts matches by published_at date (newest first)
+        5. Returns the most recent matching release
+        
+        RELEASE OBJECT STRUCTURE (returned):
+        The returned object contains these key properties:
+        - name          : Release title (e.g., "GCC 14.2.0 POSIX threads...")
+        - tag_name      : Git tag for the release
+        - published_at  : ISO 8601 timestamp of publication
+        - prerelease    : Boolean, true if pre-release
+        - assets        : Array of downloadable files with:
+            - name                 : Filename (e.g., "winlibs-x86_64-posix-seh-gcc-14.2.0-...7z")
+            - browser_download_url : Direct download URL
+            - size                 : File size in bytes
+    
     .PARAMETER Owner
-        Repository owner.
+        The GitHub username or organization that owns the repository.
+        Default for WinLibs: 'brechtsanders'
+    
     .PARAMETER Repo
-        Repository name.
+        The repository name.
+        Default for WinLibs: 'winlibs_mingw'
+    
     .PARAMETER TitlePattern
         Wildcard pattern to match against release titles.
+        Uses PowerShell's -like operator (* and ? wildcards).
+        
+        Common patterns:
+        - '*UCRT*POSIX*'     : UCRT runtime with POSIX threads
+        - '*MSVCRT*Win32*'   : MSVCRT runtime with Win32 threads
+        - '*GCC 14*UCRT*'    : Specific GCC version
+    
     .OUTPUTS
-        The release object, or $null if not found.
+        [PSCustomObject] The matching release object with assets.
+        [null] If no matching release is found.
+    
+    .EXAMPLE
+        # Find latest UCRT POSIX release
+        $release = Find-GitHubRelease -Owner 'brechtsanders' -Repo 'winlibs_mingw' -TitlePattern '*UCRT*POSIX*'
+        Write-Host "Found: $($release.name)"
+        Write-Host "Published: $($release.published_at)"
+    
+    .EXAMPLE
+        # Find release and access download asset
+        $release = Find-GitHubRelease -Owner 'brechtsanders' -Repo 'winlibs_mingw' -TitlePattern '*UCRT*POSIX*'
+        $asset = $release.assets | Where-Object { $_.name -match '.*x86_64.*\.7z$' } | Select-Object -First 1
+        Write-Host "Download: $($asset.browser_download_url)"
     #>
     [CmdletBinding()]
     param(
@@ -390,13 +648,62 @@ function Find-GitHubRelease {
 function Invoke-FileDownload {
     <#
     .SYNOPSIS
-        Downloads a file with retry logic and detailed progress display.
+        Downloads a file from URL with retry logic and real-time progress display.
+    
+    .DESCRIPTION
+        Downloads a file from the specified URL to the local filesystem with:
+        
+        FEATURES:
+        - Automatic retry on failure (configurable via DownloadRetries)
+        - Real-time progress display with percentage and KB transferred
+        - Automatic cleanup of partial downloads on failure
+        - Different behavior for GitHub Actions vs local terminal
+        - Configurable timeouts and buffer sizes via config
+        
+        PROGRESS DISPLAY:
+        In local terminal mode, shows updating progress line:
+          Progress (Attempt 1): 15360KB / 150000KB (10%)
+        
+        In GitHub Actions, uses simple Invoke-WebRequest without progress
+        to avoid log pollution.
+        
+        RETRY BEHAVIOR:
+        1. Attempts download up to DownloadRetries times (default: 3)
+        2. On failure, removes any partial file
+        3. Waits DownloadRetryDelaySeconds between attempts (default: 10)
+        4. Logs each attempt and failure reason
+        
+        IMPLEMENTATION DETAILS:
+        Uses System.Net.HttpWebRequest for progress tracking with a
+        configurable buffer size (DownloadBufferSize, default: 80KB).
+        Progress updates every 100ms to prevent console flicker.
+    
     .PARAMETER Url
-        The URL to download from.
+        The URL to download from. Typically a GitHub release asset URL.
+        Example: https://github.com/.../releases/download/.../file.7z
+    
     .PARAMETER Destination
-        The local file path to save to.
+        The local file path to save the downloaded file to.
+        Parent directory will be created if it doesn't exist.
+    
     .OUTPUTS
-        $true on success, $false on failure.
+        [bool] $true if download succeeded, $false if all retries failed.
+    
+    .EXAMPLE
+        # Download a file with automatic retry
+        $success = Invoke-FileDownload `
+            -Url 'https://github.com/.../mingw.7z' `
+            -Destination 'C:\Temp\mingw.7z'
+        
+        if (-not $success) {
+            Write-Error "Download failed"
+        }
+    
+    .EXAMPLE
+        # Used in the build pipeline
+        if (-not (Invoke-FileDownload -Url $asset.browser_download_url -Destination $archiveFile)) {
+            return $false
+        }
     #>
     [CmdletBinding()]
     param(
@@ -495,13 +802,51 @@ function Invoke-FileDownload {
 function Expand-7ZipArchive {
     <#
     .SYNOPSIS
-        Extracts an archive using 7-Zip.
+        Extracts an archive using 7-Zip command-line tool.
+    
+    .DESCRIPTION
+        Extracts any archive format supported by 7-Zip to a specified directory.
+        This function wraps 7-Zip (7z.exe) with proper process management.
+        
+        SUPPORTED FORMATS:
+        7-Zip can extract many formats including: 7z, ZIP, GZIP, BZIP2, TAR,
+        RAR, CAB, ISO, WIM, and more. WinLibs uses .7z for distribution.
+        
+        PROCESS MANAGEMENT:
+        - Runs 7-Zip as a child process with redirected output
+        - Registers the process for cancellation support (Ctrl+C cleanup)
+        - Polls for exit every 500ms to allow interrupt handling
+        - Suppresses verbose 7-Zip output (redirected to null)
+        
+        COMMAND EXECUTED:
+        7z.exe x "<archive>" -o"<destination>" -y
+        
+        Where:
+        - x     = Extract with full paths
+        - -o    = Output directory
+        - -y    = Yes to all prompts (overwrite)
+    
     .PARAMETER ArchivePath
-        Path to the archive file.
+        Full path to the archive file to extract.
+        Example: C:\Temp\mingw-ucrt-posix-seh.7z
+    
     .PARAMETER DestinationPath
-        Directory to extract to.
+        Directory to extract the archive contents to.
+        Will contain the extracted folder (e.g., mingw64/).
+    
     .OUTPUTS
-        $true on success, $false on failure.
+        [bool] $true if extraction succeeded (exit code 0), $false otherwise.
+    
+    .EXAMPLE
+        $success = Expand-7ZipArchive `
+            -ArchivePath 'C:\Downloads\mingw.7z' `
+            -DestinationPath 'C:\Temp\extracted'
+        
+        # After extraction, C:\Temp\extracted\mingw64\ contains the files
+    
+    .NOTES
+        Requires 7-Zip to be installed. Path is obtained from Get-BuildConfig.
+        Exit codes: 0=Success, 1=Warning, 2=Fatal error, 7=Command line error
     #>
     [CmdletBinding()]
     param(
@@ -574,17 +919,52 @@ function Format-FileSize {
 function New-TestFixtures {
     <#
     .SYNOPSIS
-        Creates test fixtures for test mode builds.
+        Creates mock MinGW directory structure for test mode builds.
+    
     .DESCRIPTION
-        Generates a minimal directory structure with version info
-        and a dummy executable to allow testing the build pipeline
-        without downloading actual MinGW packages.
+        Generates a minimal directory structure that mimics a real MinGW
+        installation, allowing the build pipeline to be tested without
+        downloading the actual ~500MB MinGW archive.
+        
+        CREATED STRUCTURE:
+        <Path>/
+        ├── bin/
+        │   └── gcc.exe         (1KB dummy file)
+        └── version_info.txt    (mock version information)
+        
+        The version_info.txt contains:
+        - Mock GCC and GDB version entries
+        - Thread model: POSIX
+        - Runtime library: UCRT (Test Mode)
+        - Package date from the Date parameter
+        
+        USE CASES:
+        1. Testing the build pipeline without network access
+        2. Rapid iteration during development
+        3. CI/CD pipeline testing with -TestMode flag
+        4. Validating Inno Setup script changes
+    
     .PARAMETER Path
-        The base path where fixtures will be created.
+        The directory path where test fixtures will be created.
+        Will be created if it doesn't exist.
+        Example: 'C:\Temp\EasyMinGW_Build\mingw64\mingw64'
+    
     .PARAMETER Architecture
-        The architecture (32 or 64).
+        The target architecture ('32' or '64').
+        Used in log messages for clarity.
+    
     .PARAMETER Date
-        The date string for version info.
+        The date string to include in version_info.txt.
+        Example: '2024-01-15'
+    
+    .EXAMPLE
+        New-TestFixtures -Path 'C:\Temp\mingw64' -Architecture '64' -Date '2024-01-15'
+        # Creates test fixtures at C:\Temp\mingw64
+    
+    .NOTES
+        The dummy gcc.exe is created using [IO.File]::WriteAllBytes for
+        PowerShell 5.1 compatibility (Set-Content with -AsByteStream
+        requires PS 6+).
     #>
     [CmdletBinding()]
     param(
@@ -784,19 +1164,85 @@ function New-FallbackChangelog {
 function Invoke-ChangelogGeneration {
     <#
     .SYNOPSIS
-        Generates a changelog using the Python script or fallback.
+        Generates a Markdown changelog by comparing package versions.
+    
+    .DESCRIPTION
+        Runs the Python changelog generator script (generate_changelog.py) to
+        create a formatted changelog for GitHub releases. The script compares
+        packages between the current and previous releases.
+        
+        CHANGELOG STRUCTURE:
+        The generated changelog includes:
+        1. Package Info section (from version_info.txt)
+        2. Script/Installer Changelogs (manual entries)
+        3. Package Changelogs (automated diff):
+           - New packages added
+           - Updated packages (version changes)
+           - Removed packages
+        4. Full Changelog link (GitHub compare URL)
+        5. File Hash section header (hashes appended later)
+        
+        DATA SOURCES:
+        The function can obtain current package info from:
+        1. Local version_info.txt (normal build mode)
+        2. GitHub release tag (test mode with -GenerateChangelog)
+        
+        Previous package info is always fetched from the previous GitHub
+        release tag to enable version comparison.
+        
+        PYTHON SCRIPT ARGUMENTS:
+        --output-file       : Path to write the changelog
+        --current-build-tag : Version string for the current build
+        --github-owner      : Repository owner (from config)
+        --github-repo       : Repository name (from config)
+        --prev-tag          : Previous release tag for comparison
+        --input-file        : Local version_info.txt path (OR)
+        --current-tag       : GitHub tag to fetch current info from
+    
     .PARAMETER VersionInfoPath
-        Path to the version_info.txt file. Optional if CurrentTag is provided.
+        Path to the local version_info.txt file extracted from MinGW archive.
+        Required unless CurrentTag is provided.
+    
     .PARAMETER OutputPath
-        Path to write the changelog.
+        Path where the changelog markdown file will be written.
+        Example: './release_notes_body.md'
+    
     .PARAMETER Version
-        The current version.
+        The current version string for changelog header and links.
+        Example: '2024.01.15'
+    
     .PARAMETER PreviousTag
-        The previous release tag for comparison.
+        Git tag of the previous release for comparison.
+        Used to generate diff and comparison link.
+        Example: '2024.01.01'
+    
     .PARAMETER CurrentTag
-        If provided, fetch current package info from this GitHub release tag instead of local file.
+        If provided, fetches current package info from this GitHub release
+        instead of using the local version_info.txt file.
+        Used in test mode with -GenerateChangelog flag.
+    
     .OUTPUTS
-        $true on success, $false on failure.
+        [bool] $true if changelog was generated successfully, $false otherwise.
+    
+    .EXAMPLE
+        # Generate changelog from local file
+        Invoke-ChangelogGeneration `
+            -VersionInfoPath 'C:\Temp\version_info.txt' `
+            -OutputPath './release_notes.md' `
+            -Version '2024.01.15' `
+            -PreviousTag '2024.01.01'
+    
+    .EXAMPLE
+        # Generate changelog from GitHub (test mode)
+        Invoke-ChangelogGeneration `
+            -OutputPath './release_notes.md' `
+            -Version '2024.01.15' `
+            -PreviousTag '2024.01.01' `
+            -CurrentTag '2024.01.15'
+    
+    .NOTES
+        Requires Python 3.8+ with the 'requests' package installed.
+        Falls back to New-FallbackChangelog if Python is unavailable.
     #>
     [CmdletBinding()]
     param(
@@ -907,23 +1353,80 @@ function Invoke-ChangelogGeneration {
 function Invoke-InstallerBuild {
     <#
     .SYNOPSIS
-        Builds the installer using Inno Setup.
+        Builds a Windows installer using Inno Setup Compiler (ISCC.exe).
+    
+    .DESCRIPTION
+        Compiles the Inno Setup script (MinGW_Installer.iss) into a Windows
+        installer executable. This is the core build step that produces the
+        final distributable .exe file.
+        
+        BUILD PROCESS:
+        1. Ensures output directory exists
+        2. Constructs ISCC.exe command line with define overrides
+        3. Runs ISCC.exe as a child process with cancellation support
+        4. Captures stdout/stderr for logging
+        5. Writes build log on error or if GenerateLogsAlways is set
+        6. Generates file hashes for the built installer (unless SkipHashes)
+        
+        INNO SETUP ARGUMENTS:
+        The function passes these /D defines to ISCC.exe:
+        - /DMyAppName="<Name>"           : Display name in installer
+        - /DMyOutputName="<OutputName>"  : Base output filename
+        - /DMyAppVersion="<Version>"     : Version string
+        - /DArch="<Architecture>"        : "32" or "64"
+        - /DSourcePath="<SourcePath>"    : Path to MinGW files
+        - /DOutputPath="<OutputDir>"     : Output directory for .exe
+        
+        OUTPUT FILE NAMING:
+        The built installer is named:
+        <OutputName>.v<Version>.<Architecture>-bit.exe
+        
+        Example: EasyMinGW.Installer.v2024.01.15.64-bit.exe
+    
     .PARAMETER Name
-        The installer display name.
+        The display name shown in the installer UI.
+        Example: 'EasyMinGW Installer'
+    
     .PARAMETER OutputName
-        The base output filename.
+        The base filename for the output (without extension).
+        Example: 'EasyMinGW.Installer'
+    
     .PARAMETER Version
-        The version string.
+        The version string, typically derived from release date.
+        Example: '2024.01.15'
+    
     .PARAMETER Architecture
-        The architecture (32 or 64).
+        The target architecture: '32' or '64'.
+        Affects both the installer name and the installation path.
+    
     .PARAMETER SourcePath
-        Path to the MinGW source files.
+        Path to the extracted MinGW directory containing bin/, lib/, etc.
+        Example: 'C:\Temp\EasyMinGW_Build\mingw64\mingw64'
+    
     .PARAMETER OutputDirectory
-        Directory for the built installer.
+        Directory where the built .exe and .hashes.txt will be placed.
+        Example: '.\output'
+    
     .PARAMETER IssPath
-        Path to the Inno Setup script.
+        Full path to the Inno Setup script (.iss file).
+        Example: 'C:\Project\MinGW_Installer.iss'
+    
     .OUTPUTS
-        $true on success, $false on failure.
+        [bool] $true if build succeeded, $false on failure.
+    
+    .EXAMPLE
+        $success = Invoke-InstallerBuild `
+            -Name 'EasyMinGW Installer' `
+            -OutputName 'EasyMinGW.Installer' `
+            -Version '2024.01.15' `
+            -Architecture '64' `
+            -SourcePath 'C:\Temp\mingw64' `
+            -OutputDirectory '.\output' `
+            -IssPath '.\MinGW_Installer.iss'
+    
+    .NOTES
+        Requires Inno Setup 5 or 6 to be installed.
+        ISCC.exe path is obtained from Get-BuildConfig.
     #>
     [CmdletBinding()]
     param(
@@ -1052,17 +1555,57 @@ $errorOutput
 function Invoke-HashGeneration {
     <#
     .SYNOPSIS
-        Generates SHA256 and MD5 hashes for a built installer.
+        Generates cryptographic hashes for a built installer file.
+    
+    .DESCRIPTION
+        Runs the Format-7ZipHashes.ps1 script to generate multiple
+        hash digests for the built installer executable. The hashes
+        are saved to a text file alongside the installer.
+        
+        GENERATED HASHES:
+        Uses 7-Zip's hash command to generate:
+        - CRC32, CRC64 (fast checksums)
+        - SHA256, SHA384, SHA512 (cryptographic)
+        - SHA1, MD5 (legacy compatibility)
+        - BLAKE2sp (fast, secure)
+        - XXH64 (extremely fast)
+        - SHA3-256 (latest standard)
+        
+        OUTPUT FILE:
+        The hash file is named:
+        <BaseName>.v<Version>.<Architecture>-bit.hashes.txt
+        
+        Example: EasyMinGW.Installer.v2024.01.15.64-bit.hashes.txt
+        
+        The hash content is also appended to the changelog for
+        inclusion in GitHub release notes.
+    
     .PARAMETER FilePath
-        Path to the file to hash.
+        Full path to the installer .exe file to hash.
+    
     .PARAMETER OutputDirectory
-        Directory to write the hash file.
+        Directory where the hash file will be written.
+    
     .PARAMETER BaseName
-        Base name for the hash file.
+        Base name for the hash file (matches installer base name).
+    
     .PARAMETER Version
-        Version string.
+        Version string for file naming.
+    
     .PARAMETER Architecture
-        Architecture string.
+        Architecture string ('32' or '64') for file naming.
+    
+    .EXAMPLE
+        Invoke-HashGeneration `
+            -FilePath 'C:\output\EasyMinGW.exe' `
+            -OutputDirectory 'C:\output' `
+            -BaseName 'EasyMinGW.Installer' `
+            -Version '2024.01.15' `
+            -Architecture '64'
+    
+    .NOTES
+        Requires Format-7ZipHashes.ps1 script in the modules directory.
+        Uses 7-Zip for hash generation (path from Get-BuildConfig).
     #>
     [CmdletBinding()]
     param(
@@ -1110,34 +1653,95 @@ function Invoke-HashGeneration {
 function Invoke-ArchitectureBuild {
     <#
     .SYNOPSIS
-        Builds a single architecture variant.
+        Builds a complete installer for a single architecture (32 or 64-bit).
+    
     .DESCRIPTION
-        Handles the complete build process for one architecture:
-        download/extract (or test fixtures), changelog, and installer build.
+        This is the main orchestration function that handles the complete build
+        pipeline for one architecture. It coordinates the following stages:
+        
+        ┌─────────────────────────────────────────────────────────────────────┐
+        │                    ARCHITECTURE BUILD PIPELINE                       │
+        ├─────────────────────────────────────────────────────────────────────┤
+        │                                                                      │
+        │  1. ASSET DISCOVERY                                                  │
+        │     ├─ In test mode: Create mock asset reference                     │
+        │     └─ Normal mode: Find matching asset in GitHub release            │
+        │                                                                      │
+        │  2. DIRECTORY SETUP                                                  │
+        │     ├─ Create architecture-specific temp directory                   │
+        │     └─ Clean any existing files                                      │
+        │                                                                      │
+        │  3. CONTENT ACQUISITION (unless SkipDownload)                        │
+        │     ├─ Test mode: Generate test fixtures with mock content           │
+        │     └─ Normal mode:                                                  │
+        │         ├─ Download .7z archive from GitHub                          │
+        │         ├─ Extract to temp directory using 7-Zip                     │
+        │         └─ Locate and copy version_info.txt                          │
+        │                                                                      │
+        │  4. CHANGELOG GENERATION (unless SkipChangelog)                      │
+        │     ├─ Parse version_info.txt for package information                │
+        │     ├─ Compare with previous release packages                        │
+        │     └─ Generate Markdown changelog                                   │
+        │                                                                      │
+        │  5. INSTALLER BUILD (unless SkipBuild)                               │
+        │     ├─ Run Inno Setup compiler (ISCC.exe)                            │
+        │     ├─ Generate .exe installer                                       │
+        │     └─ Generate hash files (SHA256, MD5, etc.)                       │
+        │                                                                      │
+        │  6. CLEANUP                                                          │
+        │     └─ Remove temp directory (skipped in test mode)                  │
+        │                                                                      │
+        └─────────────────────────────────────────────────────────────────────┘
+    
     .PARAMETER Architecture
-        The architecture to build (32 or 64).
+        The architecture to build: "32" or "64".
+    
     .PARAMETER AssetPattern
-        Regex pattern to match the download asset.
+        Regex pattern to match the download asset filename in the release.
+        Example: '.*ucrt-runtime.*posix.*without-llvm.*\.7z$'
+    
     .PARAMETER Release
-        The GitHub release object.
+        The GitHub release object (from Find-GitHubRelease) containing assets.
+    
     .PARAMETER Version
-        The version string.
+        The version string for the installer (e.g., "2024.01.15").
+    
     .PARAMETER Date
-        The release date string.
+        The release date string for display/logging.
+    
     .PARAMETER PreviousTag
-        The previous release tag for changelog.
+        The previous release tag for changelog comparison. Optional.
+    
     .PARAMETER CurrentTag
-        If provided, fetch current package info from this GitHub release for changelog.
+        If provided, fetches current package info from this GitHub release
+        instead of local version_info.txt. Used in test mode with GenerateChangelog.
+    
     .PARAMETER OutputDirectory
-        Directory for build outputs.
+        Directory where the built installer and hash files will be placed.
+    
     .PARAMETER TempDirectory
-        Temporary working directory.
+        Base temporary directory for downloads and extraction.
+    
     .PARAMETER IssPath
-        Path to Inno Setup script.
+        Full path to the Inno Setup script (MinGW_Installer.iss).
+    
     .PARAMETER ReleaseNotesPath
-        Path to write release notes.
+        Path where the release notes markdown will be written.
+    
     .OUTPUTS
-        $true on success, $false on failure.
+        [bool] $true on success, $false on failure.
+    
+    .EXAMPLE
+        $result = Invoke-ArchitectureBuild `
+            -Architecture '64' `
+            -AssetPattern '.*ucrt.*posix.*\.7z$' `
+            -Release $releaseObject `
+            -Version '2024.01.15' `
+            -Date '2024-01-15' `
+            -OutputDirectory './output' `
+            -TempDirectory './temp' `
+            -IssPath './MinGW_Installer.iss' `
+            -ReleaseNotesPath './release_notes_body.md'
     #>
     [CmdletBinding()]
     param(
@@ -1306,15 +1910,62 @@ function Invoke-ArchitectureBuild {
 function Add-HashesToChangelog {
     <#
     .SYNOPSIS
-        Appends hash file contents to the changelog.
+        Appends file hashes to the changelog for each built architecture.
+    
+    .DESCRIPTION
+        After all installers are built, this function appends the hash
+        information to the release notes markdown file. This provides
+        users with verification hashes in the GitHub release notes.
+        
+        OUTPUT FORMAT:
+        For each architecture, appends a block like:
+        
+        **64-bit**
+        ```text
+        Name: EasyMinGW.Installer.v2024.01.15.64-bit.exe
+        Size: 123456789 bytes : 117.7 MiB
+        CRC32: 4E068660
+        SHA256: ABC123...
+        ... (more hashes)
+        ```
+        
+        IDEMPOTENCY:
+        The function checks if hash blocks already exist (by looking for
+        the **<arch>-bit** header) and skips if already present. This
+        allows safe re-runs without duplicate content.
+        
+        HASH FILE NAMING:
+        Expects hash files named:
+        <InstallerBaseName>.v<Version>.<Architecture>-bit.hashes.txt
+        
+        Example: EasyMinGW.Installer.v2024.01.15.64-bit.hashes.txt
+    
     .PARAMETER ChangelogPath
-        Path to the changelog file.
+        Path to the changelog markdown file to append to.
+        Example: './release_notes_body.md'
+    
     .PARAMETER OutputDirectory
-        Directory containing hash files.
+        Directory containing the .hashes.txt files.
+        Example: './output'
+    
     .PARAMETER Version
-        The version string.
+        Version string used in hash file naming.
+        Example: '2024.01.15'
+    
     .PARAMETER Architectures
-        Array of architectures to add hashes for.
+        Array of architectures that were built.
+        Example: @('64', '32')
+    
+    .EXAMPLE
+        Add-HashesToChangelog `
+            -ChangelogPath './release_notes_body.md' `
+            -OutputDirectory './output' `
+            -Version '2024.01.15' `
+            -Architectures @('64', '32')
+    
+    .NOTES
+        Called at the end of the build process after all architectures
+        have been built and their hash files generated.
     #>
     [CmdletBinding()]
     param(

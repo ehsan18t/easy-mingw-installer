@@ -1,3 +1,80 @@
+<#
+.SYNOPSIS
+    Generates multiple hash digests for a file using 7-Zip's hash command.
+
+.DESCRIPTION
+    This script leverages 7-Zip's built-in hash functionality to generate a
+    comprehensive set of cryptographic hashes for a given file. The output is
+    formatted in a human-readable format suitable for inclusion in release notes.
+    
+    7-Zip's hash command (7z h) can compute many hash algorithms simultaneously,
+    which is more efficient than running multiple hash utilities.
+    
+    GENERATED HASHES:
+    ┌────────────┬──────────────────────────────────────────────────────────────┐
+    │  Algorithm │  Description                                                 │
+    ├────────────┼──────────────────────────────────────────────────────────────┤
+    │  CRC32     │  Standard 32-bit cyclic redundancy check                     │
+    │  CRC64     │  Extended 64-bit CRC (ECMA-182 polynomial)                   │
+    │  SHA256    │  SHA-2 256-bit (recommended for integrity verification)      │
+    │  SHA1      │  SHA-1 160-bit (legacy, not for security)                    │
+    │  BLAKE2sp  │  BLAKE2s parallel, very fast on multi-core                   │
+    │  MD5       │  MD5 128-bit (legacy, not for security)                      │
+    │  XXH64     │  xxHash 64-bit, extremely fast non-crypto hash               │
+    │  SHA384    │  SHA-2 384-bit                                               │
+    │  SHA512    │  SHA-2 512-bit                                               │
+    │  SHA3-256  │  SHA-3 256-bit (Keccak)                                      │
+    └────────────┴──────────────────────────────────────────────────────────────┘
+    
+    OUTPUT FORMAT:
+    The script outputs in a simple "Key: Value" format:
+    
+        Name: EasyMinGW.Installer.v2024.01.15.64-bit.exe
+        Size: 123456789 bytes : 117.7 MiB
+        CRC32: 4E068660
+        SHA256: ABC123...
+        (etc.)
+    
+    This output is typically redirected to a .hashes.txt file alongside the
+    installer, and also appended to the changelog for release notes.
+
+.PARAMETER FilePath
+    The full path to the file to hash. Must be an existing file.
+
+.PARAMETER SevenZipExePath
+    Path to the 7-Zip executable (7z.exe). Defaults to the standard
+    Program Files installation location.
+
+.OUTPUTS
+    String output containing formatted hash information. Use Out-File or
+    Set-Content to save to a file.
+
+.EXAMPLE
+    .\Format-7ZipHashes.ps1 -FilePath "C:\Builds\Installer.exe"
+    # Outputs hash information to console
+
+.EXAMPLE
+    .\Format-7ZipHashes.ps1 -FilePath ".\output\EasyMinGW.exe" | Out-File "hashes.txt"
+    # Saves hash information to a file
+
+.EXAMPLE
+    # Called from functions.ps1:
+    & $hashScript -FilePath $exePath -SevenZipExePath $cfg.SevenZipPath | 
+        Out-File $hashFile -Encoding utf8
+
+.NOTES
+    File Name      : Format-7ZipHashes.ps1
+    Location       : modules/Format-7ZipHashes.ps1
+    Prerequisite   : 7-Zip 19.00 or later (for all hash algorithms)
+    
+    The -scrc* switch tells 7-Zip to calculate all supported hash types.
+    Older versions of 7-Zip may not support all hash algorithms.
+
+.LINK
+    https://7-zip.org/
+    https://www.7-zip.org/7z.html
+#>
+
 [CmdletBinding()]
 param (
     [Parameter(Mandatory=$true)]
