@@ -59,7 +59,6 @@
     Location       : modules/pretty.ps1
     
     SCRIPT-SCOPED VARIABLES:
-    - $script:colors         : Hashtable mapping color names to ConsoleColor
     - $script:IsGitHubActions: Boolean, true when running in GitHub Actions
     
     GITHUB ACTIONS DETECTION:
@@ -93,26 +92,6 @@
 # ============================================================================
 # Provides formatted, colored console output with GitHub Actions compatibility.
 # ============================================================================
-
-# Console colors
-$script:colors = @{
-    Black       = 'Black'
-    DarkBlue    = 'DarkBlue'
-    DarkGreen   = 'DarkGreen'
-    DarkCyan    = 'DarkCyan'
-    DarkRed     = 'DarkRed'
-    DarkMagenta = 'DarkMagenta'
-    DarkYellow  = 'DarkYellow'
-    Gray        = 'Gray'
-    DarkGray    = 'DarkGray'
-    Blue        = 'Blue'
-    Green       = 'Green'
-    Cyan        = 'Cyan'
-    Red         = 'Red'
-    Magenta     = 'Magenta'
-    Yellow      = 'Yellow'
-    White       = 'White'
-}
 
 # Detect GitHub Actions environment
 $script:IsGitHubActions = $env:GITHUB_ACTIONS -eq 'true'
@@ -162,10 +141,10 @@ function Write-LogEntry {
         [string]$Type,
         [Parameter(Mandatory = $true)]
         [string]$Message,
-        [System.ConsoleColor]$TypeColor = $script:colors.White,
-        [System.ConsoleColor]$MessageColor = $script:colors.DarkCyan
+        [System.ConsoleColor]$TypeColor = 'White',
+        [System.ConsoleColor]$MessageColor = 'DarkCyan'
     )
-    Write-FormattedLine -Indicator "->" -Type $Type -Message $Message -IndicatorColor $script:colors.Blue -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-FormattedLine -Indicator "->" -Type $Type -Message $Message -IndicatorColor 'Blue' -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
 function Write-StatusInfo {
@@ -175,10 +154,10 @@ function Write-StatusInfo {
         [string]$Type,
         [Parameter(Mandatory = $true)]
         [string]$Message,
-        [System.ConsoleColor]$TypeColor = $script:colors.White,
-        [System.ConsoleColor]$MessageColor = $script:colors.Yellow
+        [System.ConsoleColor]$TypeColor = 'White',
+        [System.ConsoleColor]$MessageColor = 'Yellow'
     )
-    Write-FormattedLine -Indicator ">>" -Type $Type -Message $Message -IndicatorColor $script:colors.Magenta -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-FormattedLine -Indicator ">>" -Type $Type -Message $Message -IndicatorColor 'Magenta' -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
 function Write-SuccessMessage {
@@ -188,10 +167,10 @@ function Write-SuccessMessage {
         [string]$Type,
         [Parameter(Mandatory = $true)]
         [string]$Message,
-        [System.ConsoleColor]$TypeColor = $script:colors.White, # Or $script:colors.Green
-        [System.ConsoleColor]$MessageColor = $script:colors.Green
+        [System.ConsoleColor]$TypeColor = 'White',
+        [System.ConsoleColor]$MessageColor = 'Green'
     )
-    Write-FormattedLine -Indicator "++" -Type $Type -Message $Message -IndicatorColor $script:colors.Green -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-FormattedLine -Indicator "++" -Type $Type -Message $Message -IndicatorColor 'Green' -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
 function Write-WarningMessage {
@@ -201,10 +180,10 @@ function Write-WarningMessage {
         [string]$Type,
         [Parameter(Mandatory = $true)]
         [string]$Message,
-        [System.ConsoleColor]$TypeColor = $script:colors.DarkYellow,
-        [System.ConsoleColor]$MessageColor = $script:colors.DarkRed
+        [System.ConsoleColor]$TypeColor = 'DarkYellow',
+        [System.ConsoleColor]$MessageColor = 'DarkRed'
     )
-    Write-FormattedLine -Indicator "!!" -Type $Type -Message $Message -IndicatorColor $script:colors.Red -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-FormattedLine -Indicator "!!" -Type $Type -Message $Message -IndicatorColor 'Red' -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
 
@@ -217,20 +196,20 @@ function Write-ErrorMessage {
         [string]$Message,
         [string]$LogFilePath,
         [int]$AssociatedExitCode = 0,
-        [System.ConsoleColor]$TypeColor = $script:colors.DarkRed,
-        [System.ConsoleColor]$MessageColor = $script:colors.Red
+        [System.ConsoleColor]$TypeColor = 'DarkRed',
+        [System.ConsoleColor]$MessageColor = 'Red'
     )
     Write-ColoredHost -Text " !! $($ErrorType): " -ForegroundColor $TypeColor -NoNewline
     Write-ColoredHost -Text $Message -ForegroundColor $MessageColor
 
     if ($AssociatedExitCode -ne 0) {
-        Write-ColoredHost -Text "    Associated Exit Code: " -ForegroundColor $script:colors.DarkRed -NoNewline
-        Write-ColoredHost -Text $AssociatedExitCode -ForegroundColor $script:colors.Cyan
+        Write-ColoredHost -Text "    Associated Exit Code: " -ForegroundColor 'DarkRed' -NoNewline
+        Write-ColoredHost -Text $AssociatedExitCode -ForegroundColor 'Cyan'
     }
     if ($LogFilePath) {
-        Write-ColoredHost -Text " >> " -ForegroundColor $script:colors.DarkYellow -NoNewline
-        Write-ColoredHost -Text "Log: " -ForegroundColor $script:colors.Yellow -NoNewline
-        Write-ColoredHost -Text $LogFilePath -ForegroundColor $script:colors.Cyan
+        Write-ColoredHost -Text " >> " -ForegroundColor 'DarkYellow' -NoNewline
+        Write-ColoredHost -Text "Log: " -ForegroundColor 'Yellow' -NoNewline
+        Write-ColoredHost -Text $LogFilePath -ForegroundColor 'Cyan'
     }
 }
 
@@ -239,7 +218,7 @@ function Write-SeparatorLine {
     param(
         [string]$Character = "-",
         [int]$Length = 50,
-        [System.ConsoleColor]$Color = $script:colors.DarkGray
+        [System.ConsoleColor]$Color = 'DarkGray'
     )
     Write-ColoredHost -Text ($Character * $Length) -ForegroundColor $Color
 }
@@ -250,7 +229,7 @@ function Write-UpdatingLine {
         [Parameter(Mandatory = $true)]
         [string]$Text,
         [Parameter(Mandatory = $false)]
-        [System.ConsoleColor]$ForegroundColor = $script:colors.Yellow,
+        [System.ConsoleColor]$ForegroundColor = 'Yellow',
         [Parameter(Mandatory = $false)]
         [int]$LineClearLength = 78
     )
@@ -330,7 +309,7 @@ function Write-BuildHeader {
 
     Write-Host ''
     Write-SeparatorLine -Character '=' -Length 60
-    Write-ColoredHost -Text "  $Title" -ForegroundColor $script:colors.Cyan
+    Write-ColoredHost -Text "  $Title" -ForegroundColor 'Cyan'
     Write-SeparatorLine -Character '=' -Length 60
 }
 
@@ -362,7 +341,7 @@ function Write-BuildInfo {
 
     Write-Host ''
     Write-SeparatorLine -Character '-' -Length 50
-    Write-ColoredHost -Text '  BUILD CONFIGURATION' -ForegroundColor $script:colors.White
+    Write-ColoredHost -Text '  BUILD CONFIGURATION' -ForegroundColor 'White'
     Write-SeparatorLine -Character '-' -Length 50
 
     # Mode Information
@@ -370,7 +349,7 @@ function Write-BuildInfo {
         if ($Config.IsTestMode) { 'TEST MODE' }
         elseif ($Config.IsGitHubActions) { 'GitHub Actions' }
         else { 'Normal' }
-    ) -ValueColor $(if ($Config.IsTestMode) { $script:colors.Yellow } else { $script:colors.Green })
+    ) -ValueColor $(if ($Config.IsTestMode) { 'Yellow' } else { 'Green' })
 
     # Active Flags
     $flags = @()
@@ -379,7 +358,7 @@ function Write-BuildInfo {
     if ($Config.SkipChangelog) { $flags += 'SkipChangelog' }
     
     if ($flags.Count -gt 0) {
-        Write-BuildInfoLine -Label 'Active Flags' -Value ($flags -join ', ') -ValueColor $script:colors.DarkYellow
+        Write-BuildInfoLine -Label 'Active Flags' -Value ($flags -join ', ') -ValueColor 'DarkYellow'
     }
 
     # Log Level
@@ -388,19 +367,19 @@ function Write-BuildInfo {
     Write-Host ''
 
     # Tool Paths
-    Write-ColoredHost -Text '  Tools:' -ForegroundColor $script:colors.Gray
+    Write-ColoredHost -Text '  Tools:' -ForegroundColor 'Gray'
     Write-BuildInfoLine -Label '7-Zip' -Value $(
         if ($Config.SevenZipPath) { $Config.SevenZipPath } else { '(not found)' }
-    ) -ValueColor $(if ($Config.SevenZipPath) { $script:colors.Cyan } else { $script:colors.Red })
+    ) -ValueColor $(if ($Config.SevenZipPath) { 'Cyan' } else { 'Red' })
     
     Write-BuildInfoLine -Label 'Inno Setup' -Value $(
         if ($Config.InnoSetupPath) { $Config.InnoSetupPath } else { '(not found)' }
-    ) -ValueColor $(if ($Config.InnoSetupPath) { $script:colors.Cyan } else { $script:colors.Red })
+    ) -ValueColor $(if ($Config.InnoSetupPath) { 'Cyan' } else { 'Red' })
 
     Write-Host ''
 
     # Directories
-    Write-ColoredHost -Text '  Directories:' -ForegroundColor $script:colors.Gray
+    Write-ColoredHost -Text '  Directories:' -ForegroundColor 'Gray'
     Write-BuildInfoLine -Label 'Temp' -Value $Config.TempDirectory
     if ($OutputPath) {
         Write-BuildInfoLine -Label 'Output' -Value $OutputPath
@@ -409,7 +388,7 @@ function Write-BuildInfo {
     # Architectures
     if ($Architectures -and $Architectures.Count -gt 0) {
         Write-Host ''
-        Write-ColoredHost -Text '  Build Targets:' -ForegroundColor $script:colors.Gray
+        Write-ColoredHost -Text '  Build Targets:' -ForegroundColor 'Gray'
         Write-BuildInfoLine -Label 'Architectures' -Value (($Architectures | ForEach-Object { "$_-bit" }) -join ', ')
     }
 
@@ -430,8 +409,8 @@ function Write-BuildInfoLine {
         [Parameter(Mandatory)]
         [string]$Value,
         
-        [System.ConsoleColor]$LabelColor = $script:colors.DarkGray,
-        [System.ConsoleColor]$ValueColor = $script:colors.Cyan
+        [System.ConsoleColor]$LabelColor = 'DarkGray',
+        [System.ConsoleColor]$ValueColor = 'Cyan'
     )
 
     $paddedLabel = $Label.PadLeft(15)
@@ -464,7 +443,7 @@ function Write-VerboseLog {
     }
 
     if ($logLevel -eq 'Verbose') {
-        Write-ColoredHost -Text "    [VERBOSE] $Message" -ForegroundColor $script:colors.DarkGray
+        Write-ColoredHost -Text "    [VERBOSE] $Message" -ForegroundColor 'DarkGray'
     }
 }
 
