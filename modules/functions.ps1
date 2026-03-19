@@ -736,7 +736,8 @@ function Invoke-FileDownload {
                 # HttpWebRequest with progress display
                 $webRequest = [System.Net.HttpWebRequest]::Create($Url)
                 $webRequest.UserAgent = $cfg.GitHubUserAgent
-                $webRequest.Timeout = $cfg.ApiTimeoutSeconds * 1000
+                $webRequest.Timeout = $cfg.DownloadTimeoutSeconds * 1000
+                $webRequest.ReadWriteTimeout = $cfg.DownloadTimeoutSeconds * 1000
                 
                 $response = $webRequest.GetResponse()
                 $totalLength = $response.ContentLength

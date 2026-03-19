@@ -306,6 +306,7 @@ function Get-BuildConfig {
         # ========================
         DownloadRetries   = 3
         DownloadRetryDelaySeconds = 10
+        DownloadTimeoutSeconds = 600  # 10 minutes for large archive downloads
         DownloadBufferSize = 80KB  # Buffer size for download progress updates
 
         # ========================
