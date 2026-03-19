@@ -274,23 +274,6 @@ function Invoke-CancellationCleanup {
         }
     }
 
-    # Clean log files in script root
-    $scriptRoot = Split-Path $PSScriptRoot -Parent
-    $logFiles = Get-ChildItem -Path $scriptRoot -Filter "*.log" -File -ErrorAction SilentlyContinue
-    if ($logFiles) {
-        $removedCount = 0
-        foreach ($log in $logFiles) {
-            try {
-                Remove-Item $log.FullName -Force -ErrorAction Stop
-                $removedCount++
-            }
-            catch { }
-        }
-        if ($removedCount -gt 0) {
-            Write-SuccessMessage -Type 'Logs' -Message "Removed $removedCount log file(s)"
-        }
-    }
-
     # Calculate duration if start time provided
     $duration = if ($StartTime) { (Get-Date) - $StartTime } else { $null }
 

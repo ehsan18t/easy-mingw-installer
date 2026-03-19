@@ -262,11 +262,6 @@ if ($PSBoundParameters.ContainsKey('GenerateChangelog')) {
 }
 if ($PSBoundParameters.ContainsKey('OfflineMode')) {
     $configOverrides['OfflineMode'] = $OfflineMode.IsPresent
-    # Offline mode implies skip download and skip changelog
-    if ($OfflineMode.IsPresent) {
-        $configOverrides['SkipDownload'] = $true
-        $configOverrides['SkipChangelog'] = $true
-    }
 }
 if ($PSBoundParameters.ContainsKey('CleanFirst')) {
     $configOverrides['CleanFirst'] = $CleanFirst.IsPresent
