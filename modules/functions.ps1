@@ -876,7 +876,11 @@ function Expand-7ZipArchive {
     $process.StartInfo = $processInfo
     $process.Start() | Out-Null
     Register-ChildProcess -Process $process
-    
+
+    # Read output asynchronously to prevent deadlock
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+
     # Poll for exit to allow Ctrl+C handling
     while (-not $process.HasExited) {
         $process.WaitForExit(500)
@@ -887,7 +891,7 @@ function Expand-7ZipArchive {
         return $true
     }
 
-    $errorOutput = $process.StandardError.ReadToEnd()
+    $errorOutput = $stderr.Result
     Write-ErrorMessage -ErrorType 'Extraction Failed' -Message "7-Zip exit code: $($process.ExitCode)"
     if ($errorOutput) {
         Write-VerboseLog "7-Zip error: $errorOutput"
