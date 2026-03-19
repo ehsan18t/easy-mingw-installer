@@ -80,8 +80,16 @@ SET "Pattern32=winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$"
 SET PowerShellCmd=PowerShell -ExecutionPolicy Bypass -File "%Builder_Script%"
 SET PowerShellCmd=%PowerShellCmd% -TitlePattern "%TitlePattern%"
 SET PowerShellCmd=%PowerShellCmd% -Archs "%archs%"
-SET PowerShellCmd=%PowerShellCmd% -NamePatterns "%Pattern64%","%Pattern32%"
 SET PowerShellCmd=%PowerShellCmd% -OutputPath "%outputPath%"
+
+@REM Build NamePatterns based on selected architectures
+IF "%archs%"=="64" (
+    SET PowerShellCmd=%PowerShellCmd% -NamePatterns "%Pattern64%"
+) ELSE IF "%archs%"=="32" (
+    SET PowerShellCmd=%PowerShellCmd% -NamePatterns "%Pattern32%"
+) ELSE (
+    SET PowerShellCmd=%PowerShellCmd% -NamePatterns "%Pattern64%","%Pattern32%"
+)
 
 @REM Add tool paths if auto-detection found them
 IF DEFINED InnoSetup ( SET PowerShellCmd=%PowerShellCmd% -InnoSetupPath "%InnoSetup%" )
