@@ -43,14 +43,21 @@ jobs:
             $tag = Get-ChildItem -Path $tagDir | Select-Object -First 1 | Select-Object -ExpandProperty Name
             if ($tag) {
               echo "Found tag: $tag"
-              echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-              echo "has_new_build=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              # Check if tag already exists on remote
+              $existingTags = git ls-remote --tags origin "refs/tags/$tag" 2>$null
+              if ($existingTags) {
+                echo "Tag $tag already exists on remote - skipping release."
+                echo "has_new_build=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              } else {
+                echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+                echo "has_new_build=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-              git config user.name "github-actions[bot]"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
-              git tag $tag
-              git push origin $tag
-              echo "Tag created and pushed: $tag"
+                git config user.name "github-actions[bot]"
+                git config user.email "github-actions[bot]@users.noreply.github.com"
+                git tag $tag
+                git push origin $tag
+                echo "Tag created and pushed: $tag"
+              }
             } else {
               echo "Error: Tag file found in $tagDir but is empty or unreadable."
               exit 1
