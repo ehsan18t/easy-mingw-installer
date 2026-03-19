@@ -16,15 +16,15 @@ on:
 
 jobs:
   test-build:
-    runs-on: windows-2022
+    runs-on: windows-2025
     name: Test Build (GCC 15)
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 

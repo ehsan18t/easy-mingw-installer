@@ -8,35 +8,31 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     steps:
-      # Step 1: Check out the repository
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      # Step 1.5: Set up Python and install dependencies
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.x" # Specify your Python version
+          python-version: "3.x"
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests 
-          # Add any other pip packages your Python script might need here
+          pip install requests
 
-      # Step 2: Run the build script
-      # This script is expected to create 'tag\<tag_name>' and 'release_notes_body.md' in the repo root
       - name: Run build script
         run: |
           cmd /c run.bat
 
-      # Step 3: Retrieve tag from file (skip if no new build)
       - name: Retrieve and Create tag
         id: get_tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
         run: |
           $tagDir = ".\tag"
           if (Test-Path $tagDir) {
@@ -66,11 +62,10 @@ jobs:
             echo "No new version detected - skipping release."
             echo "has_new_build=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
-        shell: pwsh
 
-      # Step 4: Debug builds folder
       - name: Debug builds folder
         if: env.has_new_build == 'true'
+        shell: pwsh
         run: |
           dir builds
           if (Test-Path .\release_notes_body.md) {
@@ -80,10 +75,9 @@ jobs:
             echo "WARNING: .\release_notes_body.md not found!"
           }
 
-      # Step 5: Upload binaries to GitHub Release
       - name: Upload binaries to GitHub Release
         if: env.has_new_build == 'true'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: true
           files: builds/**/*
@@ -93,9 +87,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 7: Handle failure and upload logs (no changes needed here)
       - name: Prepare logs on failure
         if: failure()
+        shell: pwsh
         run: |
           $destinationDir = ".\logs"
           if (-not (Test-Path -Path $destinationDir)) {
@@ -105,7 +99,7 @@ jobs:
           foreach ($file in $logFiles) {
               Move-Item -Path $file.FullName -Destination $destinationDir
           }
-        shell: pwsh
+
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
