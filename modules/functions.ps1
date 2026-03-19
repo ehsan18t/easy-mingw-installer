@@ -404,24 +404,40 @@ function Invoke-GitHubApi {
 
     $cfg = Get-BuildConfig
 
-    try {
-        $headers = @{
-            'User-Agent' = $cfg.GitHubUserAgent
-            'Accept'     = 'application/vnd.github.v3+json'
+    $headers = @{
+        'User-Agent' = $cfg.GitHubUserAgent
+        'Accept'     = 'application/vnd.github.v3+json'
+    }
+
+    # Use GITHUB_TOKEN for authentication if available (avoids rate limiting)
+    $token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN')
+    if ($token) {
+        $headers['Authorization'] = "token $token"
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $cfg.ApiMaxRetries; $attempt++) {
+        try {
+            Write-VerboseLog "API request (attempt $attempt): $Uri"
+            $result = Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $cfg.ApiTimeoutSeconds
+
+            # Cache successful responses
+            $script:ApiCache[$Uri] = $result
+            return $result
         }
+        catch {
+            $lastError = $_
+            Write-VerboseLog "API attempt $attempt failed: $($_.Exception.Message)"
 
-        Write-VerboseLog "API request: $Uri"
-        $result = Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $cfg.ApiTimeoutSeconds
+            if ($attempt -lt $cfg.ApiMaxRetries) {
+                Start-Sleep -Seconds $cfg.ApiRetryDelaySeconds
+            }
+        }
+    }
 
-        # Cache successful responses
-        $script:ApiCache[$Uri] = $result
-        return $result
-    }
-    catch {
-        Write-WarningMessage -Type 'API Error' -Message "Failed: $Uri"
-        Write-VerboseLog "API error details: $($_.Exception.Message)"
-        return $null
-    }
+    Write-WarningMessage -Type 'API Error' -Message "Failed after $($cfg.ApiMaxRetries) attempts: $Uri"
+    Write-VerboseLog "API error details: $($lastError.Exception.Message)"
+    return $null
 }
 
 function Get-LatestGitHubTag {
