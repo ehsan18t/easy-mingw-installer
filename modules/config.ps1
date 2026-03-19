@@ -32,7 +32,6 @@
     
     1. Call Initialize-BuildConfig once at script startup with any overrides
     2. Use Get-BuildConfig throughout the codebase to access settings
-    3. Use Reset-BuildConfig for testing (clears cached config)
 
 .NOTES
     File Name      : config.ps1
@@ -42,8 +41,6 @@
     - Get-BuildConfig        : Returns the configuration object
     - Initialize-BuildConfig : Initializes config with runtime overrides
     - Test-BuildDependencies : Validates required tools are available
-    - Reset-BuildConfig      : Clears cached config (for testing)
-    
     INTERNAL FUNCTIONS:
     - Get-EnvOrDefault       : Gets env var or returns default
     - Find-Tool              : Searches Program Files for a tool
@@ -539,12 +536,4 @@ function Test-BuildDependencies {
         Success = ($errors.Count -eq 0)
         Errors  = $errors
     }
-}
-
-function Reset-BuildConfig {
-    <#
-    .SYNOPSIS
-        Resets the configuration cache (useful for testing).
-    #>
-    $script:Config = $null
 }

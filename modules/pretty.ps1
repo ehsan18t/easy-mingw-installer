@@ -38,16 +38,12 @@
     - Write-SuccessMessage   : Success notification (++ Type: Message)
     - Write-WarningMessage   : Warning notification (!! Type: Message)
     - Write-ErrorMessage     : Error notification (** Type: Message)
-    - Write-ActionProgress   : Progress for ongoing action
-    
     DYNAMIC OUTPUT:
     - Write-UpdatingLine     : Updates current line (for progress display)
     - End-UpdatingLine       : Ends an updating line with newline
     
     GITHUB ACTIONS INTEGRATION:
-    - Write-GitHubActionsGroup   : Start/end collapsible log groups
     - Write-GitHubActionsError   : Write error annotation
-    - Write-GitHubActionsWarning : Write warning annotation
     
     BUILD INFORMATION:
     - Write-BuildHeader      : Display script banner/title
@@ -55,10 +51,8 @@
     - Write-BuildInfoLine    : Single line in build info display
     - Write-BuildSummary     : Final build status summary
     
-    VERBOSE/DEBUG (respects LogLevel):
+    VERBOSE (respects LogLevel):
     - Write-VerboseLog       : Only shown when LogLevel is 'Verbose'
-    - Write-DebugLog         : Debug info (only in Verbose mode)
-    - Test-ShouldLog         : Check if logging should occur
 
 .NOTES
     File Name      : pretty.ps1
@@ -213,20 +207,6 @@ function Write-WarningMessage {
     Write-FormattedLine -Indicator "!!" -Type $Type -Message $Message -IndicatorColor $script:colors.Red -TypeColor $TypeColor -MessageColor $MessageColor
 }
 
-function Write-ActionProgress {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$ActionName, # e.g., "Downloading", "Extracting"
-        [Parameter(Mandatory = $true)]
-        [string]$Details,    # e.g., "filename.zip" or progress info
-        [System.ConsoleColor]$ActionColor = $script:colors.White,
-        [System.ConsoleColor]$DetailsColor = $script:colors.Yellow
-    )
-    Write-ColoredHost -Text " >> " -ForegroundColor $script:colors.DarkYellow -NoNewline
-    Write-ColoredHost -Text "$($ActionName) " -ForegroundColor $ActionColor -NoNewline
-    Write-ColoredHost -Text $Details -ForegroundColor $DetailsColor
-}
 
 function Write-ErrorMessage {
     [CmdletBinding()]
@@ -298,28 +278,6 @@ function End-UpdatingLine {
 # GitHub Actions Integration
 # ============================================================================
 
-function Write-GitHubActionsGroup {
-    <#
-    .SYNOPSIS
-        Starts or ends a collapsible group in GitHub Actions logs.
-    #>
-    [CmdletBinding()]
-    param(
-        [switch]$Start,
-        [switch]$End,
-        [string]$Name
-    )
-
-    if (-not $script:IsGitHubActions) { return }
-
-    if ($Start -and $Name) {
-        Write-Host "::group::$Name"
-    }
-    elseif ($End) {
-        Write-Host '::endgroup::'
-    }
-}
-
 function Write-GitHubActionsError {
     <#
     .SYNOPSIS
@@ -351,25 +309,6 @@ function Write-GitHubActionsError {
     $annotation += "::$Message"
     
     Write-Host $annotation
-}
-
-function Write-GitHubActionsWarning {
-    <#
-    .SYNOPSIS
-        Writes a warning annotation in GitHub Actions.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Message
-    )
-
-    if (-not $script:IsGitHubActions) {
-        Write-WarningMessage -Type 'WARNING' -Message $Message
-        return
-    }
-
-    Write-Host "::warning::$Message"
 }
 
 # ============================================================================
@@ -527,58 +466,6 @@ function Write-VerboseLog {
     if ($logLevel -eq 'Verbose') {
         Write-ColoredHost -Text "    [VERBOSE] $Message" -ForegroundColor $script:colors.DarkGray
     }
-}
-
-function Write-DebugLog {
-    <#
-    .SYNOPSIS
-        Writes a debug log message (only shown when LogLevel is 'Verbose').
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Message
-    )
-
-    $logLevel = 'Normal'
-    if (Get-Command Get-BuildConfig -ErrorAction SilentlyContinue) {
-        $cfg = Get-BuildConfig
-        if ($cfg -and $cfg.LogLevel) {
-            $logLevel = $cfg.LogLevel
-        }
-    }
-
-    if ($logLevel -eq 'Verbose') {
-        Write-ColoredHost -Text "    [DEBUG] $Message" -ForegroundColor $script:colors.DarkMagenta
-    }
-}
-
-function Test-ShouldLog {
-    <#
-    .SYNOPSIS
-        Returns whether logging should occur based on current log level.
-    .PARAMETER Level
-        The minimum level required ('Verbose', 'Normal', 'Quiet').
-    #>
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateSet('Verbose', 'Normal', 'Quiet')]
-        [string]$Level
-    )
-
-    $currentLevel = 'Normal'
-    if (Get-Command Get-BuildConfig -ErrorAction SilentlyContinue) {
-        $cfg = Get-BuildConfig
-        if ($cfg -and $cfg.LogLevel) {
-            $currentLevel = $cfg.LogLevel
-        }
-    }
-
-    $levelOrder = @{ 'Verbose' = 0; 'Normal' = 1; 'Quiet' = 2 }
-    
-    return $levelOrder[$currentLevel] -le $levelOrder[$Level]
 }
 
 # ============================================================================

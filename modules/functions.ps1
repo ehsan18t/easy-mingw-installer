@@ -18,8 +18,6 @@
     - Test-BuildCancelled      : Checks if build was cancelled
     - Set-BuildCancelled       : Marks build as cancelled
     - Invoke-CancellationCleanup : Performs full cleanup on Ctrl+C
-    - Wait-ProcessWithCleanup  : Waits for process with Ctrl+C support
-    
     ═══════════════════════════════════════════════════════════════════════════════
     GITHUB API FUNCTIONS
     ═══════════════════════════════════════════════════════════════════════════════
@@ -299,49 +297,6 @@ function Invoke-CancellationCleanup {
     # Final summary
     Write-Host ""
     Write-BuildSummary -Success $false -Cancelled -Duration $duration
-}
-
-function Wait-ProcessWithCleanup {
-    <#
-    .SYNOPSIS
-        Waits for a process to exit, with support for Ctrl+C cleanup.
-        Uses polling to allow the finally block to execute on termination.
-    .PARAMETER Process
-        The process to wait for.
-    .PARAMETER CleanupPaths
-        Hashtable with TempDirectory, OutputDirectory, ChangelogPath for cleanup.
-    .OUTPUTS
-        $true if process completed, $false if interrupted.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [System.Diagnostics.Process]$Process,
-
-        [Parameter()]
-        [hashtable]$CleanupPaths
-    )
-
-    try {
-        # Poll every 500ms so we can respond to Ctrl+C
-        while (-not $Process.HasExited) {
-            $Process.WaitForExit(500)
-        }
-        return $true
-    }
-    catch [System.Management.Automation.PipelineStoppedException] {
-        # Ctrl+C was pressed
-        Set-BuildCancelled
-        
-        if ($CleanupPaths) {
-            Invoke-CancellationCleanup @CleanupPaths
-        }
-        else {
-            Stop-AllChildProcesses
-        }
-        
-        throw
-    }
 }
 
 # ============================================================================
