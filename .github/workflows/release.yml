@@ -32,19 +32,19 @@ jobs:
         run: |
           cmd /c run.bat
 
-      # Step 3: Retrieve tag from file
+      # Step 3: Retrieve tag from file (skip if no new build)
       - name: Retrieve and Create tag
-        id: get_tag # Add an id to this step to reference its output if needed elsewhere
+        id: get_tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Retrieve the tag name from the created file (assuming it's in a 'tag' directory)
-          $tagDir = ".\tag" # Path to the directory containing the tag file
+          $tagDir = ".\tag"
           if (Test-Path $tagDir) {
             $tag = Get-ChildItem -Path $tagDir | Select-Object -First 1 | Select-Object -ExpandProperty Name
             if ($tag) {
               echo "Found tag: $tag"
               echo "tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              echo "has_new_build=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
               git config user.name "github-actions[bot]"
               git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -56,32 +56,33 @@ jobs:
               exit 1
             }
           } else {
-            echo "Error: Tag directory '$tagDir' not found. Build script might have failed to create it."
-            exit 1
+            echo "No new version detected - skipping release."
+            echo "has_new_build=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
-        shell: pwsh # Ensure PowerShell is used for this script block
+        shell: pwsh
 
       # Step 4: Debug builds folder
       - name: Debug builds folder
+        if: env.has_new_build == 'true'
         run: |
           dir builds
           if (Test-Path .\release_notes_body.md) {
             echo "Release notes file found."
-            Get-Content .\release_notes_body.md | Select-Object -First 5 # Display first 5 lines
+            Get-Content .\release_notes_body.md | Select-Object -First 5
           } else {
             echo "WARNING: .\release_notes_body.md not found!"
           }
 
       # Step 5: Upload binaries to GitHub Release
       - name: Upload binaries to GitHub Release
+        if: env.has_new_build == 'true'
         uses: softprops/action-gh-release@v1
         with:
-          # draft: true # Set to false if you want to publish immediately
           draft: true
           files: builds/**/*
           tag_name: ${{ env.tag }}
           name: Easy MinGW Installer v${{ env.tag }}
-          body_path: release_notes_body.md # Use the generated markdown file for the release body
+          body_path: release_notes_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
