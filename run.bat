@@ -38,7 +38,7 @@ SET "cleanFirst=1"
 @REM ============================================================================
 
 @REM GCC Version: 12, 13, 14, 15
-SET "GCC_Ver=15"
+SET "GCC_Ver=16"
 
 @REM Runtime: MSVCRT or UCRT
 SET "Runtime=UCRT"
