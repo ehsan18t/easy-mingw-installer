@@ -891,11 +891,13 @@ function New-TestFixtures {
         │   └── gcc.exe         (1KB dummy file)
         └── version_info.txt    (mock version information)
         
-        The version_info.txt contains:
-        - Mock GCC and GDB version entries
-        - Thread model: POSIX
+        The version_info.txt mirrors the real winlibs layout so that
+        generate_changelog.py can parse it:
+        - The winlibs header line that starts the package list
+        - Five mock packages at version 99.x, which cannot collide with real ones
+        - Thread model in lowercase, to exercise POSIX normalization
         - Runtime library: UCRT (Test Mode)
-        - Package date from the Date parameter
+        - The "compiled with GCC ... packaged on <date>" build line
         
         USE CASES:
         1. Testing the build pipeline without network access
@@ -949,14 +951,23 @@ function New-TestFixtures {
         New-Item $binDir -ItemType Directory -Force | Out-Null
     }
 
-    # Create version info file
+    # Create version info file.
+    # This must mirror the real winlibs version_info.txt layout closely enough that
+    # generate_changelog.py parses it. The parser starts collecting packages only on a
+    # line containing both "This is the winlibs Intel/AMD" and "build of:" (see
+    # WINLIBS_PREFIX / WINLIBS_SUFFIX in that script). Lowercase "posix" is deliberate:
+    # it exercises the parser's POSIX normalization. Version 99.x cannot collide with
+    # a real package version.
     $versionContent = @"
-winlibs personal build version gcc-TEST-mingw-w64ucrt-TEST
-- GCC TEST.0
-- GDB TEST.0
-Thread model: POSIX
+This is the winlibs Intel/AMD $Architecture-bit standalone build of:
+- GCC 99.1.0
+- GDB 99.1
+- MinGW-w64 99.0.0 (linked with ucrt)
+- GNU Binutils 99.42
+- GNU Make 99.4
+Thread model: posix
 Runtime library: UCRT (Test Mode)
-Packaged on $Date
+This build was compiled with GCC 99.1.0 and packaged on $Date.
 "@
     $versionPath = Join-Path $Path 'version_info.txt'
     Set-Content -Path $versionPath -Value $versionContent -Encoding UTF8
