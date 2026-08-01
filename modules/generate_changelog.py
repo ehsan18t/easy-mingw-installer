@@ -177,106 +177,103 @@ class GitHubClient:
 # Package Parser
 # =============================================================================
 
-class PackageParser:
-    """Parses package information from various sources."""
+@dataclass
+class BuildInfo:
+    """Everything parsed out of a version_info.txt or a release body."""
+    package_lines: List[str]      # raw "- name version" lines, in order
+    thread_model: str
+    runtime_library: str
+    build_line: str               # "This build was compiled with GCC ... packaged on ..."
 
-    @staticmethod
-    def parse_line(line: str) -> Optional[Package]:
-        """
-        Parse a single package line into a Package object.
 
-        Args:
-            line: A line like "- GCC 14.2.0" or "- GCC 14.2.0 (with POSIX threads)"
+# Markdown decorations that wrap the same content as plain text:
+#   <strong>Thread model:</strong> POSIX   ->   Thread model: POSIX
+#   > This build was compiled with GCC ... ->   This build was compiled with GCC ...
+#   <br>                                   ->   (empty)
+_MARKDOWN_NOISE = re.compile(r"</?strong>|^>\s*|<br>\s*$")
 
-        Returns:
-            Package object or None if line doesn't match expected format.
-        """
-        trimmed = line.strip()
 
-        # Try full pattern with version
-        match = re.match(PACKAGE_LINE_PATTERN, trimmed)
-        if match:
-            return Package(
-                name=match.group(1).strip(),
-                version=match.group(2).strip(),
-                extra_info=match.group(3).strip() if match.group(3) else "",
-                full_line=trimmed
-            )
+def normalize(line: str) -> str:
+    """Strip markdown decoration so one parser handles both input formats."""
+    return _MARKDOWN_NOISE.sub("", line.strip()).strip()
 
-        # Try pattern without version
-        match = re.match(PACKAGE_LINE_NO_VERSION_PATTERN, trimmed)
-        if match:
-            return Package(
-                name=match.group(1).strip(),
-                version=None,
-                extra_info="",
-                full_line=trimmed
-            )
 
-        return None
+def parse_build_info(lines: List[str]) -> BuildInfo:
+    """
+    Parse package info from either a version_info.txt or a GitHub release body.
 
-    @staticmethod
-    def lines_to_dict(lines: List[str]) -> Dict[str, Package]:
-        """
-        Convert a list of package lines to a dictionary keyed by name.
+    Both formats carry the same content; markdown just decorates it. normalize()
+    removes the decoration, so the state machine below is format-agnostic. This
+    replaced three near-duplicate parsers that had to be kept in step by hand.
 
-        Args:
-            lines: List of package lines (e.g., ["- GCC 14.2.0", "- binutils 2.42"])
+    The package list starts at the winlibs header line (one containing both
+    WINLIBS_PREFIX and WINLIBS_SUFFIX) and ends at the first non-"- " line.
+    """
+    packages: List[str] = []
+    thread_model = ""
+    runtime_library = ""
+    build_line = ""
+    in_list = False
 
-        Returns:
-            Dictionary mapping package name to Package object.
-        """
-        packages: Dict[str, Package] = {}
-        for line in lines:
-            pkg = PackageParser.parse_line(line)
-            if pkg and pkg.name:
-                packages[pkg.name] = pkg
-        return packages
+    for raw in lines:
+        line = normalize(raw)
 
-    @staticmethod
-    def extract_from_markdown(markdown_lines: List[str]) -> Dict[str, Package]:
-        """
-        Extract packages from GitHub release markdown body.
-
-        Looks for the "Package Info" section and extracts package lines.
-
-        Args:
-            markdown_lines: Lines from a GitHub release body.
-
-        Returns:
-            Dictionary mapping package name to Package object.
-        """
-        if not markdown_lines:
-            return {}
-
-        package_lines: List[str] = []
-        in_package_info = False
-        in_package_list = False
-
-        for line in markdown_lines:
-            # Look for Package Info section header
-            if re.match(PACKAGE_INFO_HEADER_PATTERN, line, re.IGNORECASE):
-                in_package_info = True
+        if not in_list:
+            if WINLIBS_PREFIX in line and WINLIBS_SUFFIX in line:
+                in_list = True
                 continue
-
-            # Look for winlibs description line
-            if in_package_info and WINLIBS_PREFIX in line and WINLIBS_SUFFIX in line:
-                in_package_list = True
+        else:
+            if line.startswith("- "):
+                packages.append(line)
                 continue
+            if line:
+                in_list = False   # fall through and classify this line below
 
-            # Extract package lines
-            if in_package_info and in_package_list:
-                if line.strip().startswith("- "):
-                    package_lines.append(line)
-                elif re.match(SECTION_HEADER_PATTERN, line):
-                    break  # Next section reached
+        if line.startswith("Thread model:"):
+            thread_model = line.split(":", 1)[1].strip()
+            if thread_model.lower() == "posix":
+                thread_model = "POSIX"
+        elif line.startswith("Runtime library:"):
+            runtime_library = line.split(":", 1)[1].strip()
+        elif "This build was compiled with GCC" in line and "and packaged on" in line:
+            build_line = line.rstrip(".")
 
-        if not package_lines and in_package_info:
-            log_warning(
-                "Packages", "Found 'Package Info' section but no items extracted")
+    return BuildInfo(packages, thread_model, runtime_library, build_line)
 
-        return PackageParser.lines_to_dict(package_lines)
 
+def parse_package_line(line: str) -> Optional[Package]:
+    """
+    Parse "- GCC 14.2.0 (with POSIX threads)" into a Package.
+
+    Falls back to a name-only Package for lines with no version, such as "- ccache".
+    """
+    trimmed = line.strip()
+
+    match = re.match(PACKAGE_LINE_PATTERN, trimmed)
+    if match:
+        return Package(
+            name=match.group(1).strip(),
+            version=match.group(2).strip(),
+            extra_info=match.group(3).strip() if match.group(3) else "",
+            full_line=trimmed,
+        )
+
+    match = re.match(PACKAGE_LINE_NO_VERSION_PATTERN, trimmed)
+    if match:
+        return Package(name=match.group(1).strip(), version=None,
+                       extra_info="", full_line=trimmed)
+
+    return None
+
+
+def packages_to_dict(lines: List[str]) -> Dict[str, Package]:
+    """Convert raw package lines to a dict keyed by package name."""
+    packages: Dict[str, Package] = {}
+    for line in lines:
+        pkg = parse_package_line(line)
+        if pkg and pkg.name:
+            packages[pkg.name] = pkg
+    return packages
 
 # =============================================================================
 # Changelog Generator
@@ -296,121 +293,21 @@ class ChangelogGenerator:
         """Append one or more lines to markdown output."""
         self.markdown_output.extend(lines)
 
-    def _parse_from_github_release(self, tag: str) -> bool:
-        """
-        Parse package info from a GitHub release.
-
-        Returns:
-            True if successful, False otherwise.
-        """
-        log_info(
-            "Mode", f"Fetching current package info from GitHub tag '{tag}'")
-        body_lines = self.client.get_release_body_lines(
-            self.owner, self.repo, tag)
-
-        if not body_lines:
-            log_error(
-                "Release", f"Could not fetch body for current tag '{tag}'")
-            return False
-
-        in_package_info = False
-        in_package_list = False
-
-        for line in body_lines:
-            line_strip = line.strip()
-
-            # Look for Package Info section header
-            if re.match(PACKAGE_INFO_HEADER_PATTERN, line, re.IGNORECASE):
-                self._append("## Package Info")
-                in_package_info = True
-                continue
-
-            # Look for winlibs description line
-            if in_package_info and WINLIBS_PREFIX in line and WINLIBS_SUFFIX in line:
-                self._append(WINLIBS_FULL_LINE)
-                in_package_list = True
-                continue
-
-            if in_package_list:
-                if line_strip.startswith("- "):
-                    self.current_package_lines.append(line_strip)
-                    self._append(line_strip)
-                elif re.match(SECTION_HEADER_PATTERN, line):
-                    in_package_list = False
-                    in_package_info = False
-                    self._append("")
-
-            # Extract thread model, runtime, build date
-            if not in_package_list and in_package_info:
-                if "<strong>Thread model:</strong>" in line:
-                    self._append(line_strip, "", "<br>", "")
-                elif "<strong>Runtime library:</strong>" in line:
-                    self._append(line_strip, "")
-                elif line_strip.startswith(">") and "compiled with GCC" in line:
-                    self._append(line_strip, "")
-
-        if not self.current_package_lines:
-            log_warning(
-                "Packages", f"No package list found in release '{tag}'")
+    def _render_package_info(self, info: BuildInfo) -> None:
+        """Emit the Package Info section from parsed build info."""
+        if info.package_lines:
+            self._append("## Package Info", WINLIBS_FULL_LINE)
+            self._append(*info.package_lines)
+            self._append("")
         else:
-            log_info(
-                "Packages", f"Found {len(self.current_package_lines)} in current release")
+            log_warning("Packages", "No package list found in input")
 
-        return True
-
-    def _parse_from_file(self, file_path: str) -> bool:
-        """
-        Parse package info from a local file.
-
-        Returns:
-            True if successful, False otherwise.
-        """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except FileNotFoundError:
-            log_error("Input File", f"Not found: {file_path}")
-            return False
-
-        in_package_list = False
-
-        for line_content in lines:
-            line_strip = line_content.strip()
-
-            # Look for winlibs description line to start package section
-            if not in_package_list and WINLIBS_PREFIX in line_content and WINLIBS_SUFFIX in line_content:
-                self._append("## Package Info", WINLIBS_FULL_LINE)
-                in_package_list = True
-                continue
-
-            if in_package_list:
-                if line_strip.startswith("- "):
-                    self.current_package_lines.append(line_strip)
-                    self._append(line_strip)
-                elif not line_strip:
-                    pass
-                elif (line_strip.startswith("Thread model:") or
-                      line_strip.startswith("Runtime library:") or
-                      ("This build was compiled with GCC" in line_content and "and packaged on" in line_content)):
-                    in_package_list = False
-                    self._append("")
-                elif self.markdown_output and self.markdown_output[-1].startswith("- "):
-                    in_package_list = False
-                    self._append("")
-
-            if not in_package_list:
-                if line_strip.startswith("Thread model:"):
-                    thread_model = line_strip.split(":", 1)[1].strip()
-                    if thread_model.lower() == "posix":
-                        thread_model = "POSIX"
-                    self._append(f"<strong>Thread model:</strong> {thread_model}", "", "<br>", "")
-                elif line_strip.startswith("Runtime library:"):
-                    runtime = line_strip.split(":", 1)[1].strip()
-                    self._append(f"<strong>Runtime library:</strong> {runtime}<br>", "")
-                elif "This build was compiled with GCC" in line_content and "and packaged on" in line_content:
-                    self._append(f"> {line_strip.rstrip('.')}", "")
-
-        return True
+        if info.thread_model:
+            self._append(f"<strong>Thread model:</strong> {info.thread_model}", "", "<br>", "")
+        if info.runtime_library:
+            self._append(f"<strong>Runtime library:</strong> {info.runtime_library}<br>", "")
+        if info.build_line:
+            self._append(f"> {info.build_line}", "")
 
     def _add_script_changelog(self) -> None:
         """Add the static script/installer changelog section."""
@@ -426,13 +323,12 @@ class ChangelogGenerator:
         if prev_tag:
             previous_body_lines = self.client.get_release_body_lines(
                 self.owner, self.repo, prev_tag)
-            previous_packages = PackageParser.extract_from_markdown(
-                previous_body_lines)
+            previous_packages = packages_to_dict(
+                parse_build_info(previous_body_lines).package_lines)
         else:
             log_info("Changelog", "No previous tag provided - skipping comparison")
 
-        current_packages = PackageParser.lines_to_dict(
-            self.current_package_lines)
+        current_packages = packages_to_dict(self.current_package_lines)
 
         updated: List[str] = []
         added: List[str] = []
@@ -516,6 +412,10 @@ class ChangelogGenerator:
         """
         Generate the full changelog and write to file.
 
+        Current package info comes from current_tag (a GitHub release body) when
+        given, otherwise from input_file (a local version_info.txt). Both are parsed
+        by the same parse_build_info().
+
         Args:
             input_file: Path to local package info file (optional if current_tag provided).
             current_tag: GitHub tag to fetch current packages from (optional if input_file provided).
@@ -526,21 +426,25 @@ class ChangelogGenerator:
         Returns:
             True if successful, False otherwise.
         """
-        # Parse current package info
         if current_tag:
-            if not self._parse_from_github_release(current_tag):
+            log_info("Mode", f"Fetching current package info from GitHub tag '{current_tag}'")
+            lines = self.client.get_release_body_lines(self.owner, self.repo, current_tag)
+            if not lines:
+                log_error("Release", f"Could not fetch body for current tag '{current_tag}'")
                 return False
         else:
-            if not self._parse_from_file(input_file):  # type: ignore
+            try:
+                with open(input_file, 'r', encoding='utf-8') as f:   # type: ignore
+                    lines = f.readlines()
+            except FileNotFoundError:
+                log_error("Input File", f"Not found: {input_file}")
                 return False
 
-        # Warn if no packages found
-        if not self.current_package_lines and "## Package Info" in self.markdown_output:
-            log_warning("Packages", "Could not parse package list from input")
-            if self.markdown_output and self.markdown_output[-1] != "":
-                self._append("")
+        info = parse_build_info(lines)
+        self.current_package_lines = info.package_lines
+        log_info("Packages", f"Found {len(info.package_lines)} in current release")
 
-        # Add sections
+        self._render_package_info(info)
         self._add_script_changelog()
         self._compare_packages(prev_tag)
         self._add_full_changelog_link(current_build_tag, prev_tag)
