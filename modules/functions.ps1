@@ -1324,7 +1324,10 @@ function Invoke-InstallerBuild {
         2. Constructs ISCC.exe command line with define overrides
         3. Runs ISCC.exe as a child process with cancellation support
         4. Captures stdout/stderr for logging
-        5. Writes build log on error or if GenerateLogsAlways is set
+        5. Writes a build log to $cfg.LogDirectory on error, or always if
+           GenerateLogsAlways is set. Logs are deliberately kept out of
+           OutputDirectory: everything in OutputDirectory is uploaded as a
+           GitHub Release asset.
         6. Generates file hashes for the built installer (unless SkipHashes)
         
         INNO SETUP ARGUMENTS:
@@ -1462,7 +1465,10 @@ function Invoke-InstallerBuild {
     
     if ($shouldWriteLog) {
         $logFileName = "build_${OutputName}_${Architecture}.log"
-        $logPath = Join-Path $OutputDirectory $logFileName
+        if (-not (Test-Path $cfg.LogDirectory)) {
+            New-Item $cfg.LogDirectory -ItemType Directory -Force | Out-Null
+        }
+        $logPath = Join-Path $cfg.LogDirectory $logFileName
         
         $logContent = @"
 ================================================================================

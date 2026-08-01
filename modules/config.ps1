@@ -204,6 +204,7 @@ function Get-BuildConfig {
         
         DIRECTORIES:
         - TempDirectory  : Temp folder for downloads and extraction
+        - LogDirectory   : Folder for Inno Setup build logs (never inside OutputPath)
         
         API SETTINGS:
         - GitHubApiBase         : GitHub API URL
@@ -288,6 +289,9 @@ function Get-BuildConfig {
         # Directories
         # ========================
         TempDirectory     = Join-Path ([System.IO.Path]::GetTempPath()) 'EasyMinGW_Build'
+        # Build logs live outside OutputPath so they are never published as release
+        # assets. $PSScriptRoot here is <repo>/modules, so the parent is the repo root.
+        LogDirectory      = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'
 
         # ========================
         # API Settings

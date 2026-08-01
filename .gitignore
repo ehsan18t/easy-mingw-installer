@@ -5,6 +5,8 @@ Output/
 builds/
 mingw*/
 *.log
+logs/
+tag/
 release_notes_body.md
 
 # Python cache

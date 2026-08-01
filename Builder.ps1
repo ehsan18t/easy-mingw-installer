@@ -451,7 +451,13 @@ try {
         if ($cfg.IsGitHubActions) {
             # write file inside tags folder with the name of the version
             # NOTE: this must live outside $cfg.TempDirectory because temp is cleaned up in finally.
+            # Recreate the directory each run so it holds exactly one tag file. A stale
+            # file from an earlier run would otherwise be picked up by the release
+            # workflow and published under the wrong version.
             $tagsDir = Join-Path -Path $PSScriptRoot -ChildPath 'tag'
+            if (Test-Path $tagsDir) {
+                Remove-Item $tagsDir -Recurse -Force
+            }
             New-Item -ItemType Directory -Path $tagsDir -Force | Out-Null
             $versionFilePath = Join-Path -Path $tagsDir -ChildPath $version
             Set-Content -Path $versionFilePath -Value $version -Encoding utf8 -NoNewline

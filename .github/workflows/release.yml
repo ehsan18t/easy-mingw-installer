@@ -25,6 +25,8 @@ jobs:
           pip install requests
 
       - name: Run build script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cmd /c run.bat
 
@@ -36,7 +38,8 @@ jobs:
         run: |
           $tagDir = ".\tag"
           if (Test-Path $tagDir) {
-            $tag = Get-ChildItem -Path $tagDir | Select-Object -First 1 | Select-Object -ExpandProperty Name
+            $tagFile = Get-ChildItem -Path $tagDir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            $tag = if ($tagFile) { $tagFile.Name } else { $null }
             if ($tag) {
               echo "Found tag: $tag"
               # Check if tag already exists on remote
@@ -87,22 +90,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare logs on failure
-        if: failure()
-        shell: pwsh
-        run: |
-          $destinationDir = ".\logs"
-          if (-not (Test-Path -Path $destinationDir)) {
-              New-Item -ItemType Directory -Path $destinationDir
-          }
-          $logFiles = Get-ChildItem -Path . -Filter "*.log" -File
-          foreach ($file in $logFiles) {
-              Move-Item -Path $file.FullName -Destination $destinationDir
-          }
-
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: logs
           path: logs/
+          if-no-files-found: ignore
