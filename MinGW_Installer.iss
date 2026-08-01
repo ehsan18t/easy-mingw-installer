@@ -61,13 +61,19 @@ VersionInfoDescription={#MyAppName} {#Arch}-bit Setup
 ; Only one architecture is ever installed, but nothing in the Add/Remove
 ; Programs entry said which one. Without this it falls back to AppVerName.
 UninstallDisplayName={#MyAppName} ({#Arch}-bit)
+; With CreateAppDir=no, {app} is {win}, so Inno puts the uninstall data in the
+; Windows directory -- roughly 12 MB of unins000.exe/.dat in C:\Windows.
+;
+; That is untidy, and UninstallFilesDir={sd}\MinGW{#Arch} was tried to fix it.
+; Do not do that. It puts the uninstaller inside the tree PrepareToInstall
+; deletes, and DelTree deletes every file it CAN before reporting failure. A
+; locked file -- the exact case the removal error message describes -- then
+; destroys unins000.exe while Setup aborts and installs nothing, leaving an
+; Add/Remove Programs entry pointing at a file that no longer exists and cannot
+; be uninstalled. Keeping the uninstaller outside the deleted tree means a
+; failed removal is always recoverable: the entry still works and its log can
+; clean up whatever survived.
 CreateAppDir=no
-; With CreateAppDir=no, {app} is {win} and Inno puts the uninstall data in the
-; Windows directory -- about 12 MB of unins000.exe/.dat in C:\Windows. Keep it
-; with the toolchain it describes instead. PrepareToInstall wipes this directory
-; on upgrade, which deletes the old uninstaller too; Inno recreates it during
-; the install step, verified end to end.
-UninstallFilesDir={sd}\MinGW{#Arch}
 PrivilegesRequired=admin
 OutputDir={#OutputPath}
 OutputBaseFilename="{#MyOutputName}.v{#MyAppVersion}.{#Arch}-bit"
@@ -236,13 +242,22 @@ begin
         a same-arch upgrade, an architecture switch, and a machine that ended
         up with both installed before this replacement logic existed.
 
-        Both calls are made unconditionally and the results combined afterwards.
-        Folding them into one expression would risk the second being skipped,
-        since Pascal Script does not guarantee short-circuit evaluation. }
+        The second removal is skipped when the first failed. Setup is already
+        going to abort at that point, so tearing down the other architecture as
+        well would destroy a working toolchain and install nothing in its place.
+        Both are only ever present in the legacy both-installed state, which is
+        exactly where that would hurt.
+
+        Written as a nested if, not "if A and B", because Pascal Script does not
+        guarantee short-circuit evaluation and the second call must not run when
+        the first failed. }
       Removed := RemoveInstallation(MinGWDir, MinGWBinDir);
       ProgressPage.SetProgress(1, 2);
-      if not RemoveInstallation(OtherDir, OtherBinDir) then
-        Removed := False;
+      if Removed then
+      begin
+        if not RemoveInstallation(OtherDir, OtherBinDir) then
+          Removed := False;
+      end;
       ProgressPage.SetProgress(2, 2);
 
       { A locked file used to fail silently: DeleteFile's result was discarded
