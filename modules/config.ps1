@@ -45,9 +45,7 @@
     - Test-BuildDependencies : Validates required tools are available
     INTERNAL FUNCTIONS:
     - Get-EnvOrDefault       : Gets env var or returns default
-    - Find-Tool              : Searches Program Files for a tool
-    - Find-SevenZip          : Locates 7-Zip executable
-    - Find-InnoSetup         : Locates Inno Setup compiler
+    - Find-Tool              : Locates an executable via env var or Program Files
     - Find-Python            : Locates a working Python interpreter
 
 .EXAMPLE
@@ -113,16 +111,58 @@ function Get-EnvOrDefault {
 function Find-Tool {
     <#
     .SYNOPSIS
-        Searches for a tool in Program Files directories.
-    .PARAMETER SubPath
-        Relative path under Program Files (e.g., '7-Zip\7z.exe').
-    .RETURNS
-        Full path if found, $null otherwise.
+        Locates an executable, preferring an environment-variable override.
+
+    .DESCRIPTION
+        Resolution order:
+        1. The environment variable named by -EnvVar, if set and pointing at a file.
+        2. Each -SubPaths candidate under each Program Files location, in the order
+           given. Candidates are tried outer-first, so an earlier candidate found in
+           any Program Files directory beats a later candidate found in the first
+           one. That is what makes Inno Setup 6 win over Inno Setup 5.
+
+        Program Files locations searched: %ProgramFiles%, %ProgramFiles(x86)%, and
+        the literal C: paths as a fallback for a 32-bit host process where the
+        environment variables resolve unexpectedly.
+
+    .PARAMETER SubPaths
+        One or more paths relative to a Program Files directory, in priority order.
+        Example: 'Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe'
+
+    .PARAMETER EnvVar
+        Name of an environment variable holding an explicit full path.
+        Example: 'EMI_7ZIP_PATH'
+
+    .OUTPUTS
+        [string] Full path to the executable, or $null if not found.
+
+    .EXAMPLE
+        $sevenZip = Find-Tool -SubPaths '7-Zip\7z.exe' -EnvVar 'EMI_7ZIP_PATH'
+
+    .EXAMPLE
+        # Prefer Inno Setup 6, fall back to 5
+        $iscc = Find-Tool -SubPaths 'Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe' `
+                          -EnvVar 'EMI_INNOSETUP_PATH'
     #>
+    [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)]
-        [string]$SubPath
+        [string[]]$SubPaths,
+
+        [Parameter()]
+        [string]$EnvVar
     )
+
+    if ($EnvVar) {
+        # -PathType Leaf is deliberate. The old Find-SevenZip accepted any existing
+        # path, so a directory in EMI_7ZIP_PATH passed here and failed later at
+        # process start with a much worse message.
+        $envPath = Get-EnvOrDefault $EnvVar
+        if ($envPath -and (Test-Path $envPath -PathType Leaf)) {
+            return $envPath
+        }
+    }
 
     $searchPaths = @(
         $env:ProgramFiles
@@ -131,53 +171,16 @@ function Find-Tool {
         'C:\Program Files (x86)'
     ) | Where-Object { $_ } | Select-Object -Unique
 
-    foreach ($basePath in $searchPaths) {
-        $fullPath = Join-Path $basePath $SubPath
-        if (Test-Path $fullPath -PathType Leaf) {
-            return $fullPath
+    foreach ($subPath in $SubPaths) {
+        foreach ($basePath in $searchPaths) {
+            $fullPath = Join-Path $basePath $subPath
+            if (Test-Path $fullPath -PathType Leaf) {
+                return $fullPath
+            }
         }
     }
 
     return $null
-}
-
-function Find-SevenZip {
-    <#
-    .SYNOPSIS
-        Locates 7-Zip executable.
-    .DESCRIPTION
-        Checks environment variable first, then searches Program Files.
-    #>
-    
-    # Check environment variable
-    $envPath = Get-EnvOrDefault 'EMI_7ZIP_PATH'
-    if ($envPath -and (Test-Path $envPath)) {
-        return $envPath
-    }
-
-    # Search common locations
-    return Find-Tool '7-Zip\7z.exe'
-}
-
-function Find-InnoSetup {
-    <#
-    .SYNOPSIS
-        Locates Inno Setup compiler (ISCC.exe).
-    .DESCRIPTION
-        Checks environment variable first, then searches for v6 and v5.
-    #>
-    
-    # Check environment variable
-    $envPath = Get-EnvOrDefault 'EMI_INNOSETUP_PATH'
-    if ($envPath -and (Test-Path $envPath)) {
-        return $envPath
-    }
-
-    # Try Inno Setup 6 first, then 5
-    $path = Find-Tool 'Inno Setup 6\ISCC.exe'
-    if ($path) { return $path }
-    
-    return Find-Tool 'Inno Setup 5\ISCC.exe'
 }
 
 function Find-Python {
@@ -442,14 +445,15 @@ function Initialize-BuildConfig {
         $cfg.SevenZipPath = $Overrides.SevenZipPath
     }
     else {
-        $cfg.SevenZipPath = Find-SevenZip
+        $cfg.SevenZipPath = Find-Tool -SubPaths '7-Zip\7z.exe' -EnvVar 'EMI_7ZIP_PATH'
     }
 
     if ($Overrides.ContainsKey('InnoSetupPath') -and $Overrides.InnoSetupPath) {
         $cfg.InnoSetupPath = $Overrides.InnoSetupPath
     }
     else {
-        $cfg.InnoSetupPath = Find-InnoSetup
+        $cfg.InnoSetupPath = Find-Tool -SubPaths 'Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe' `
+                                       -EnvVar 'EMI_INNOSETUP_PATH'
     }
 
     # Python is only needed for changelog generation, so a null here is not fatal;

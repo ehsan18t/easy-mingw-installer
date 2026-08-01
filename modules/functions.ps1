@@ -1342,9 +1342,9 @@ function Invoke-HashGeneration {
         Generates cryptographic hashes for a built installer file.
     
     .DESCRIPTION
-        Runs the Format-7ZipHashes.ps1 script to generate multiple
-        hash digests for the built installer executable. The hashes
-        are saved to a text file alongside the installer.
+        Generates multiple hash digests for the built installer executable in a
+        single 7-Zip pass. The hashes are saved to a text file alongside the
+        installer and later appended to the changelog by Add-HashesToChangelog.
         
         GENERATED HASHES:
         Uses 7-Zip's hash command to generate:
@@ -1388,8 +1388,13 @@ function Invoke-HashGeneration {
             -Architecture '64'
     
     .NOTES
-        Requires Format-7ZipHashes.ps1 script in the modules directory.
-        Uses 7-Zip for hash generation (path from Get-BuildConfig).
+        Requires 7-Zip. Older 7-Zip builds may not support every algorithm; missing
+        ones are written with an empty value rather than omitted, so the file format
+        stays stable across 7-Zip versions.
+
+        Hash generation failures warn but do not fail the build. A missing hash file
+        is not a reason to discard a good installer; the release notes simply end up
+        with an empty File Hash section.
     #>
     [CmdletBinding()]
     param(
@@ -1410,24 +1415,54 @@ function Invoke-HashGeneration {
     )
 
     $cfg = Get-BuildConfig
-    $hashScript = Join-Path $PSScriptRoot 'Format-7ZipHashes.ps1'
+    $hashFile = Join-Path $OutputDirectory "$BaseName.v$Version.$Architecture-bit.hashes.txt"
 
-    if (-not (Test-Path $hashScript)) {
-        Write-WarningMessage -Type 'Hashes' -Message 'Hash script not found, skipping'
+    # -scrc* asks 7-Zip for every hash algorithm it supports in a single pass, which
+    # is why this is one 7-Zip call rather than ten separate hash utilities.
+    $result = Invoke-Tool -FilePath $cfg.SevenZipPath -Arguments "h -scrc* `"$FilePath`""
+
+    if ($result.ExitCode -ne 0) {
+        Write-WarningMessage -Type 'Hashes' -Message "7-Zip exit code $($result.ExitCode); skipping"
         return
     }
 
-    try {
-        $hashFile = Join-Path $OutputDirectory "$BaseName.v$Version.$Architecture-bit.hashes.txt"
-
-        & $hashScript -FilePath $FilePath -SevenZipExePath $cfg.SevenZipPath |
-            Out-File $hashFile -Encoding utf8
-
-        Write-SuccessMessage -Type 'Hashes' -Message (Split-Path $hashFile -Leaf)
+    # Key order is published in the release notes and must not change.
+    $hashes = [ordered]@{
+        'CRC32' = ''; 'CRC64' = ''; 'SHA256' = ''; 'SHA1' = ''; 'BLAKE2sp' = ''
+        'MD5'   = ''; 'XXH64' = ''; 'SHA384' = ''; 'SHA512' = ''; 'SHA3-256' = ''
     }
-    catch {
-        Write-WarningMessage -Type 'Hashes' -Message "Generation failed: $($_.Exception.Message)"
+    $sizeBytes = ''
+    $sizeHuman = ''
+
+    foreach ($line in ($result.StandardOutput -split "`r?`n")) {
+        # "1 file, 706412 bytes (689 KiB)"
+        if ($line -match '^\d+\s+file(?:s)?,\s*(\d+)\s*bytes\s*\(([^)]+)\)') {
+            $sizeBytes = $Matches[1]
+            $sizeHuman = $Matches[2]
+        }
+        # "CRC32  for data:              4E068660"
+        elseif ($line -match '^([A-Z0-9-]+)\s+for data:\s+([A-Fa-f0-9]+)') {
+            $reported = $Matches[1]
+            $value    = $Matches[2]
+            # Match case-insensitively but write through the canonical key. Assigning
+            # $hashes['BLAKE2SP'] would make the ordered hashtable adopt that
+            # spelling, changing the published format from "BLAKE2sp:" to "BLAKE2SP:".
+            $canonical = $hashes.Keys | Where-Object { $_ -eq $reported } | Select-Object -First 1
+            if ($canonical) {
+                $hashes[$canonical] = $value
+            }
+        }
     }
+
+    $lines = @("Name: $(Split-Path $FilePath -Leaf)")
+    if ($sizeBytes -and $sizeHuman) { $lines += "Size: $sizeBytes bytes : $sizeHuman" }
+    elseif ($sizeBytes)             { $lines += "Size: $sizeBytes bytes" }
+    foreach ($entry in $hashes.GetEnumerator()) {
+        $lines += "$($entry.Key): $($entry.Value)"
+    }
+
+    $lines | Out-File -FilePath $hashFile -Encoding utf8
+    Write-SuccessMessage -Type 'Hashes' -Message (Split-Path $hashFile -Leaf)
 }
 
 # ============================================================================
