@@ -18,6 +18,7 @@
     - Test-BuildCancelled      : Checks if build was cancelled
     - Set-BuildCancelled       : Marks build as cancelled
     - Invoke-CancellationCleanup : Performs full cleanup on Ctrl+C
+    - Invoke-Tool              : Runs an external tool as a tracked child process
     ═══════════════════════════════════════════════════════════════════════════════
     GITHUB API FUNCTIONS
     ═══════════════════════════════════════════════════════════════════════════════
@@ -262,6 +263,91 @@ function Invoke-CancellationCleanup {
     # Final summary
     Write-Host ""
     Write-BuildSummary -Success $false -Cancelled -Duration $duration
+}
+
+function Invoke-Tool {
+    <#
+    .SYNOPSIS
+        Runs an external tool as a tracked child process and returns its result.
+
+    .DESCRIPTION
+        Single entry point for every external process the build spawns: 7-Zip, the
+        Inno Setup compiler, and Python. Centralizing this guarantees all three
+        behave identically in the ways that matter:
+
+        - The process is registered with Register-ChildProcess, so Ctrl+C can kill it.
+        - Both stdout and stderr are drained asynchronously BEFORE waiting. A child
+          that fills a redirected pipe buffer blocks forever if the parent waits
+          first. The three hand-rolled copies this replaced had already drifted:
+          one read stdout it never used, one redirected only stderr and read it
+          after exit.
+        - Exit is polled in 500ms slices rather than blocking indefinitely, which
+          leaves the pipeline interruptible.
+
+        The caller decides what a given exit code means; this function does not
+        interpret it.
+
+    .PARAMETER FilePath
+        Full path to the executable.
+
+    .PARAMETER Arguments
+        The complete argument string, already quoted by the caller.
+
+    .OUTPUTS
+        [hashtable] with keys:
+        - ExitCode       : [int]    the process exit code
+        - StandardOutput : [string] everything the process wrote to stdout
+        - StandardError  : [string] everything the process wrote to stderr
+
+    .EXAMPLE
+        $result = Invoke-Tool -FilePath $cfg.SevenZipPath `
+                              -Arguments "x `"$archive`" -o`"$dest`" -y"
+        if ($result.ExitCode -ne 0) {
+            Write-ErrorMessage -ErrorType 'Extract' -Message $result.StandardError
+        }
+
+    .EXAMPLE
+        # Capturing compiler output for a build log
+        $result = Invoke-Tool -FilePath $cfg.InnoSetupPath -Arguments $isccArgs
+        $result.StandardOutput | Out-File $logPath -Encoding UTF8
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory)]
+        [string]$Arguments
+    )
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $FilePath
+    $psi.Arguments              = $Arguments
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    $process.Start() | Out-Null
+    Register-ChildProcess -Process $process
+
+    # Start draining before waiting, or a full pipe buffer deadlocks the child.
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+
+    # Poll so Ctrl+C can still interrupt.
+    while (-not $process.HasExited) {
+        $process.WaitForExit(500)
+    }
+
+    return @{
+        ExitCode       = $process.ExitCode
+        StandardOutput = $stdout.Result
+        StandardError  = $stderr.Result
+    }
 }
 
 # ============================================================================
@@ -761,39 +847,18 @@ function Expand-7ZipArchive {
 
     Write-StatusInfo -Type 'Extracting' -Message $archiveName
 
-    # Run 7-Zip with output redirected (suppress verbose logging)
     $arguments = "x `"$ArchivePath`" -o`"$DestinationPath`" -y"
-    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processInfo.FileName = $cfg.SevenZipPath
-    $processInfo.Arguments = $arguments
-    $processInfo.RedirectStandardOutput = $true
-    $processInfo.RedirectStandardError = $true
-    $processInfo.UseShellExecute = $false
-    $processInfo.CreateNoWindow = $true
+    $result = Invoke-Tool -FilePath $cfg.SevenZipPath -Arguments $arguments
 
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $processInfo
-    $process.Start() | Out-Null
-    Register-ChildProcess -Process $process
-
-    # Read output asynchronously to prevent deadlock
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
-
-    # Poll for exit to allow Ctrl+C handling
-    while (-not $process.HasExited) {
-        $process.WaitForExit(500)
-    }
-
-    if ($process.ExitCode -eq 0) {
+    # Any non-zero code fails the build, including 1. See this function's .NOTES.
+    if ($result.ExitCode -eq 0) {
         Write-SuccessMessage -Type 'Extracted' -Message "to $DestinationPath"
         return $true
     }
 
-    $errorOutput = $stderr.Result
-    Write-ErrorMessage -ErrorType 'Extraction Failed' -Message "7-Zip exit code: $($process.ExitCode)"
-    if ($errorOutput) {
-        Write-VerboseLog "7-Zip error: $errorOutput"
+    Write-ErrorMessage -ErrorType 'Extraction Failed' -Message "7-Zip exit code: $($result.ExitCode)"
+    if ($result.StandardError) {
+        Write-VerboseLog "7-Zip error: $($result.StandardError)"
     }
     return $false
 }
@@ -1062,36 +1127,20 @@ function Invoke-ChangelogGeneration {
 
     $pyArgs += '--input-file', $VersionInfoPath
 
-    # Start Python process with tracking for cancellation
-    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processInfo.FileName = $cfg.PythonPath
-    $processInfo.Arguments = ($pyArgs | ForEach-Object {
-        if ($_ -match '\s') { "`"$_`"" } else { $_ } 
+    $argString = ($pyArgs | ForEach-Object {
+        if ($_ -match '\s') { "`"$_`"" } else { $_ }
     }) -join ' '
-    $processInfo.UseShellExecute = $false
-    $processInfo.CreateNoWindow = $true
-    $processInfo.RedirectStandardError = $true
 
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $processInfo
-    $process.Start() | Out-Null
-    Register-ChildProcess -Process $process
-    
-    # Poll for exit to allow Ctrl+C handling
-    while (-not $process.HasExited) {
-        $process.WaitForExit(500)
-    }
+    $result = Invoke-Tool -FilePath $cfg.PythonPath -Arguments $argString
 
-    if ($process.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
+    if ($result.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
         Write-SuccessMessage -Type 'Changelog' -Message 'Generated successfully'
         return $true
     }
 
-    # Python failed - report error and fail
-    $stderr = $process.StandardError.ReadToEnd()
-    Write-ErrorMessage -ErrorType 'Changelog' -Message "Python script failed with exit code $($process.ExitCode)"
-    if ($stderr) {
-        Write-VerboseLog "Python stderr: $stderr"
+    Write-ErrorMessage -ErrorType 'Changelog' -Message "Python script failed with exit code $($result.ExitCode)"
+    if ($result.StandardError) {
+        Write-VerboseLog "Python stderr: $($result.StandardError)"
     }
     return $false
 }
@@ -1225,34 +1274,13 @@ function Invoke-InstallerBuild {
         "`"$IssPath`""
     ) -join ' '
 
-    # Run Inno Setup with output redirected (suppress verbose logging)
-    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processInfo.FileName = $cfg.InnoSetupPath
-    $processInfo.Arguments = $arguments
-    $processInfo.RedirectStandardOutput = $true
-    $processInfo.RedirectStandardError = $true
-    $processInfo.UseShellExecute = $false
-    $processInfo.CreateNoWindow = $true
+    $result = Invoke-Tool -FilePath $cfg.InnoSetupPath -Arguments $arguments
 
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $processInfo
-    $process.Start() | Out-Null
-    Register-ChildProcess -Process $process
-    
-    # Read output asynchronously to prevent deadlock
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
-    
-    # Poll for exit to allow Ctrl+C handling
-    while (-not $process.HasExited) {
-        $process.WaitForExit(500)
-    }
-
-    $standardOutput = $stdout.Result
-    $errorOutput = $stderr.Result
+    $standardOutput = $result.StandardOutput
+    $errorOutput    = $result.StandardError
 
     # Determine if we should write log file
-    $shouldWriteLog = $cfg.GenerateLogsAlways -or ($process.ExitCode -ne 0)
+    $shouldWriteLog = $cfg.GenerateLogsAlways -or ($result.ExitCode -ne 0)
     
     if ($shouldWriteLog) {
         $logFileName = "build_${OutputName}_${Architecture}.log"
@@ -1266,7 +1294,7 @@ function Invoke-InstallerBuild {
 Inno Setup Build Log
 ================================================================================
 Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-Exit Code: $($process.ExitCode)
+Exit Code: $($result.ExitCode)
 Name: $Name
 Version: $Version
 Architecture: $Architecture-bit
@@ -1284,7 +1312,7 @@ $errorOutput
         Write-VerboseLog "Build log saved: $logFileName"
     }
 
-    if ($process.ExitCode -eq 0) {
+    if ($result.ExitCode -eq 0) {
         $outputFile = "$OutputName.v$Version.$Architecture-bit.exe"
         Write-SuccessMessage -Type 'Built' -Message $outputFile
 
@@ -1301,7 +1329,7 @@ $errorOutput
     }
 
     # Build failed - show error details
-    Write-ErrorMessage -ErrorType 'Build Failed' -Message "Inno Setup exit code: $($process.ExitCode)"
+    Write-ErrorMessage -ErrorType 'Build Failed' -Message "Inno Setup exit code: $($result.ExitCode)"
     if ($errorOutput) {
         Write-VerboseLog "Inno Setup error: $errorOutput"
     }
