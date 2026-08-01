@@ -49,7 +49,6 @@
     ═══════════════════════════════════════════════════════════════════════════════
     Functions for generating release changelogs from package information.
     
-    - New-FallbackChangelog    : Creates basic changelog without Python
     - Invoke-ChangelogGeneration : Runs Python changelog generator
     
     ═══════════════════════════════════════════════════════════════════════════════
@@ -187,22 +186,19 @@ function Invoke-CancellationCleanup {
         CLEANUP SEQUENCE:
         1. Terminates all tracked child processes (7-Zip, Inno Setup, Python)
         2. Removes the temporary directory with downloaded/extracted files
-        3. Removes the output directory with partial installer builds
-        4. Removes the changelog file if it was being generated
-        5. Removes any .log files created in the script root
-        6. Displays a cancellation summary with elapsed time
-        
-        This ensures no partial or corrupted files are left behind after
-        an interrupted build.
-    
+        3. Removes the changelog file if it was being generated
+        4. Displays a cancellation summary with elapsed time
+
+        The output directory is deliberately NOT removed. It may be a user-supplied
+        path (-OutputPath) and may already hold completed installers from earlier
+        architectures in the same run. Deleting it turned Ctrl+C during a two-arch
+        build into the loss of the finished first installer, and
+        `-OutputPath D:\Downloads` into the loss of that directory.
+
     .PARAMETER TempDirectory
         Path to the temporary build directory (e.g., %TEMP%\EasyMinGW_Build).
         Contains downloaded archives and extracted MinGW files.
-    
-    .PARAMETER OutputDirectory
-        Path to the output directory (e.g., ./output).
-        Contains built installers and hash files.
-    
+
     .PARAMETER ChangelogPath
         Path to the release notes markdown file (e.g., ./release_notes_body.md).
     
@@ -212,14 +208,12 @@ function Invoke-CancellationCleanup {
     .EXAMPLE
         Invoke-CancellationCleanup `
             -TempDirectory 'C:\Temp\EasyMinGW_Build' `
-            -OutputDirectory '.\output' `
             -ChangelogPath '.\release_notes_body.md' `
             -StartTime $buildStartTime
     #>
     [CmdletBinding()]
     param(
         [string]$TempDirectory,
-        [string]$OutputDirectory,
         [string]$ChangelogPath,
         [DateTime]$StartTime
     )
@@ -248,17 +242,6 @@ function Invoke-CancellationCleanup {
         }
         catch {
             Write-WarningMessage -Type 'Temp' -Message "Failed to remove: $TempDirectory"
-        }
-    }
-
-    # Clean output directory
-    if ($OutputDirectory -and (Test-Path $OutputDirectory)) {
-        try {
-            Remove-Item $OutputDirectory -Recurse -Force -ErrorAction Stop
-            Write-SuccessMessage -Type 'Output' -Message "Removed: $OutputDirectory"
-        }
-        catch {
-            Write-WarningMessage -Type 'Output' -Message "Failed to remove: $OutputDirectory"
         }
     }
 
@@ -743,7 +726,7 @@ function Expand-7ZipArchive {
         Will contain the extracted folder (e.g., mingw64/).
     
     .OUTPUTS
-        [bool] $true if extraction succeeded (exit code 0), $false otherwise.
+        [bool] $true only if 7-Zip exited 0. $false for every other exit code.
     
     .EXAMPLE
         $success = Expand-7ZipArchive `
@@ -754,7 +737,15 @@ function Expand-7ZipArchive {
     
     .NOTES
         Requires 7-Zip to be installed. Path is obtained from Get-BuildConfig.
-        Exit codes: 0=Success, 1=Warning, 2=Fatal error, 7=Command line error
+
+        7-Zip exit codes: 0=Success, 1=Warning (non-fatal), 2=Fatal error,
+        7=Command line error, 8=Not enough memory, 255=User stopped.
+
+        This function treats ANY non-zero code as failure, including 1. That is
+        stricter than 7-Zip's own convention, and deliberately so: code 1 means some
+        files were not extracted, and a MinGW toolchain missing arbitrary files still
+        produces an installer that compiles nothing. A partial extract is not
+        shippable, so it is not tolerated.
     #>
     [CmdletBinding()]
     param(
@@ -936,153 +927,6 @@ This build was compiled with GCC 99.1.0 and packaged on $Date.
 # ============================================================================
 # Changelog Functions
 # ============================================================================
-
-function New-FallbackChangelog {
-    <#
-    .SYNOPSIS
-        Creates a fallback changelog when the Python generator isn't available.
-    .PARAMETER OutputPath
-        Path to write the changelog file.
-    .PARAMETER Version
-        The release version.
-    .PARAMETER VersionInfoPath
-        Optional path to version_info.txt for package info.
-    .PARAMETER PreviousTag
-        Optional previous release tag for changelog link.
-    .PARAMETER GitHubOwner
-        GitHub repository owner.
-    .PARAMETER GitHubRepo
-        GitHub repository name.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$OutputPath,
-
-        [Parameter(Mandatory)]
-        [string]$Version,
-
-        [Parameter()]
-        [string]$VersionInfoPath,
-
-        [Parameter()]
-        [string]$PreviousTag,
-
-        [Parameter()]
-        [string]$GitHubOwner = 'ehsan18t',
-
-        [Parameter()]
-        [string]$GitHubRepo = 'easy-mingw-installer'
-    )
-
-    Write-WarningMessage -Type 'Changelog' -Message 'Using fallback template'
-
-    $changelogLines = @()
-
-    # Parse version_info.txt to extract all info (matching Python script behavior)
-    if ($VersionInfoPath -and (Test-Path $VersionInfoPath)) {
-        $fileContent = Get-Content $VersionInfoPath -Raw
-        $lines = Get-Content $VersionInfoPath
-
-        $inPackageList = $false
-        $packageLines = @()
-        $threadModel = ''
-        $runtimeLibrary = ''
-        $buildLine = ''
-
-        foreach ($line in $lines) {
-            $lineStrip = $line.Trim()
-
-            # Start of package list
-            if (-not $inPackageList -and $line -match 'This is the winlibs Intel/AMD' -and $line -match 'build of:') {
-                $inPackageList = $true
-                continue
-            }
-
-            if ($inPackageList) {
-                if ($lineStrip -match '^- ') {
-                    $packageLines += $lineStrip
-                }
-                elseif ($lineStrip -match '^Thread model:' -or
-                        $lineStrip -match '^Runtime library:' -or
-                        ($line -match 'This build was compiled with GCC' -and $line -match 'and packaged on')) {
-                    $inPackageList = $false
-                }
-            }
-
-            # Extract thread model
-            if ($lineStrip -match '^Thread model:\s*(.+)$') {
-                $threadModel = $Matches[1].Trim()
-                if ($threadModel.ToLower() -eq 'posix') { $threadModel = 'POSIX' }
-            }
-
-            # Extract runtime library
-            if ($lineStrip -match '^Runtime library:\s*(.+)$') {
-                $runtimeLibrary = $Matches[1].Trim()
-            }
-
-            # Extract build line (with quirky dot handling matching old Python script)
-            if ($line -match 'This build was compiled with GCC' -and $line -match 'and packaged on') {
-                if ($lineStrip.EndsWith('.')) {
-                    # Remove FIRST dot only if line ends with dot (legacy quirky behavior)
-                    $buildLine = $lineStrip -replace '\.', '', 1
-                } else {
-                    $buildLine = $lineStrip
-                }
-            }
-        }
-
-        # Build Package Info section
-        $changelogLines += '## Package Info'
-        $changelogLines += 'This is the winlibs Intel/AMD 64-bit & 32-bit standalone build of:'
-        $changelogLines += $packageLines
-        $changelogLines += ''
-
-        if ($threadModel) {
-            $changelogLines += "<strong>Thread model:</strong> $threadModel"
-            $changelogLines += ''
-            $changelogLines += '<br>'
-            $changelogLines += ''
-        }
-
-        if ($runtimeLibrary) {
-            $changelogLines += "<strong>Runtime library:</strong> $runtimeLibrary<br>"
-            $changelogLines += ''
-        }
-
-        if ($buildLine) {
-            $changelogLines += "> $buildLine"
-            $changelogLines += ''
-        }
-    }
-
-    # Script/Installer Changelogs section
-    $changelogLines += '## Script/Installer Changelogs'
-    $changelogLines += '* None'
-    $changelogLines += ''
-
-    # Package Changelogs section
-    $changelogLines += '## Package Changelogs'
-    $changelogLines += "* Could not retrieve or parse previous version's package list; all current packages are listed as new if any."
-    $changelogLines += ''
-
-    # Full Changelog link
-    $changelogLines += '<br>'
-    $changelogLines += ''
-    if ($PreviousTag -and $Version) {
-        $changelogLines += "**Full Changelog**: https://github.com/$GitHubOwner/$GitHubRepo/compare/$PreviousTag...$Version"
-    } else {
-        $changelogLines += '**Full Changelog**: [TODO: Update link - Previous project tag missing]'
-    }
-    $changelogLines += ''
-    $changelogLines += '<br>'
-    $changelogLines += ''
-    $changelogLines += '### File Hash'
-
-    $changelogContent = $changelogLines -join "`n"
-    Set-Content -Path $OutputPath -Value $changelogContent -Encoding UTF8 -NoNewline
-    return $true
-}
 
 function Invoke-ChangelogGeneration {
     <#
@@ -1747,19 +1591,27 @@ function Invoke-ArchitectureBuild {
                 return $false
             }
 
-            # Find the extracted mingw folder
+            # Find the extracted mingw folder. Failing here gives a clear message
+            # instead of letting ISCC fail later on a missing InfoBeforeFile.
             $extracted = Get-ChildItem $archTempDir -Directory |
                 Where-Object { $_.Name -like 'mingw*' } |
                 Select-Object -First 1
 
-            if ($extracted) {
-                $sourcePath = $extracted.FullName
+            if (-not $extracted) {
+                $found = (Get-ChildItem $archTempDir -Directory | Select-Object -ExpandProperty Name) -join ', '
+                Write-ErrorMessage -ErrorType 'Extraction' -Message "No 'mingw*' directory in $archTempDir (found: $found)"
+                return $false
+            }
 
-                # Copy version info for changelog
-                $versionInfo = Join-Path $sourcePath 'version_info.txt'
-                if (Test-Path $versionInfo) {
-                    Copy-Item $versionInfo $buildInfoPath
-                }
+            $sourcePath = $extracted.FullName
+
+            # Copy version info for changelog
+            $versionInfo = Join-Path $sourcePath 'version_info.txt'
+            if (Test-Path $versionInfo) {
+                Copy-Item $versionInfo $buildInfoPath
+            }
+            else {
+                Write-WarningMessage -Type 'Version Info' -Message "Not found in $sourcePath; changelog will be incomplete"
             }
         }
 

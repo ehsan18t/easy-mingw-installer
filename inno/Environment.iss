@@ -5,17 +5,32 @@ procedure EnvRemovePath(Path: string);
 var
     Paths: string;
     P: Integer;
+    Changed: Boolean;
 begin
+    { An empty needle would match everywhere and loop forever. }
+    if Path = '' then exit;
+
     { Skip if registry entry doesn't exist }
     if not RegQueryStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths) then
         exit;
 
-    { Skip if string not found in path }
-    P := Pos(Uppercase(Path) + ';', Uppercase(Paths));
-    if P = 0 then exit;
+    Changed := False;
 
-    { Remove the path from the variable }
-    Delete(Paths, P, Length(Path) + 1);
+    { Pad the haystack with ';' so a trailing entry that has no separator after it
+      still matches. This mirrors NeedsAddPath in MinGW_Installer.iss. Without the
+      padding, an entry that ends up last in PATH is silently left behind on
+      uninstall, pointing at a deleted directory. Loop so a duplicated entry is
+      fully removed rather than leaving one behind. Delete clamps to the string
+      length, so removing a trailing entry is safe. }
+    P := Pos(Uppercase(Path) + ';', Uppercase(Paths) + ';');
+    while P > 0 do
+    begin
+        Delete(Paths, P, Length(Path) + 1);
+        Changed := True;
+        P := Pos(Uppercase(Path) + ';', Uppercase(Paths) + ';');
+    end;
+
+    if not Changed then exit;
 
     { Write updated path environment variable }
     if RegWriteStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths)

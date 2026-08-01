@@ -75,7 +75,8 @@
     date. The temp directory is kept so the generated tree can be inspected.
 
 .PARAMETER CleanFirst
-    Removes the temp directory before starting the build.
+    Removes the temp directory and any leftover release_notes_body.md before
+    starting, so the build cannot reuse artifacts from a previous run.
 
 .PARAMETER CheckNewRelease
     Compares WinLibs version against project's latest tag.
@@ -222,10 +223,9 @@ $ErrorActionPreference = 'Stop'
 # Store paths and state for cleanup (will be set after config initialization)
 
 $script:CleanupPaths = @{
-    TempDirectory   = $null
-    OutputDirectory = $null
-    ChangelogPath   = $null
-    StartTime       = $null
+    TempDirectory = $null
+    ChangelogPath = $null
+    StartTime     = $null
 }
 
 # ============================================================================
@@ -271,12 +271,30 @@ Initialize-BuildConfig -Overrides $configOverrides
 $cfg = Get-BuildConfig
 
 # ============================================================================
+# Path Setup
+# ============================================================================
+
+$outputDir        = if ($OutputPath) { $OutputPath } else { Join-Path $PSScriptRoot 'output' }
+$issPath          = Join-Path $PSScriptRoot 'MinGW_Installer.iss'
+$releaseNotesPath = Join-Path $PSScriptRoot 'release_notes_body.md'
+
+# ============================================================================
 # Clean First (if requested)
 # ============================================================================
 
-if ($cfg.CleanFirst -and (Test-Path $cfg.TempDirectory)) {
-    Write-Host "`n[Clean] Removing temp directory: $($cfg.TempDirectory)" -ForegroundColor Yellow
-    Remove-Item -Path $cfg.TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+if ($cfg.CleanFirst) {
+    if (Test-Path $cfg.TempDirectory) {
+        Write-Host "`n[Clean] Removing temp directory: $($cfg.TempDirectory)" -ForegroundColor Yellow
+        Remove-Item -Path $cfg.TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # The changelog must go too. Invoke-ChangelogGeneration skips generation when the
+    # file already exists (so the 32-bit pass does not clobber the 64-bit pass), which
+    # means a leftover file from an earlier run would be published verbatim, with the
+    # previous run's package diff and compare link.
+    if (Test-Path $releaseNotesPath) {
+        Write-Host "[Clean] Removing stale changelog: $releaseNotesPath" -ForegroundColor Yellow
+        Remove-Item -Path $releaseNotesPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ============================================================================
@@ -285,14 +303,8 @@ if ($cfg.CleanFirst -and (Test-Path $cfg.TempDirectory)) {
 
 Write-BuildHeader -Title 'Easy MinGW Installer Builder'
 
-# Setup paths
-$outputDir = if ($OutputPath) { $OutputPath } else { Join-Path $PSScriptRoot 'output' }
-$issPath = Join-Path $PSScriptRoot 'MinGW_Installer.iss'
-$releaseNotesPath = Join-Path $PSScriptRoot 'release_notes_body.md'
-
 # Update cleanup paths for cancellation handler
 $script:CleanupPaths.TempDirectory = $cfg.TempDirectory
-$script:CleanupPaths.OutputDirectory = $outputDir
 $script:CleanupPaths.ChangelogPath = $releaseNotesPath
 
 # Display build configuration
@@ -466,7 +478,6 @@ catch [System.Management.Automation.PipelineStoppedException] {
     Set-BuildCancelled
     Invoke-CancellationCleanup `
         -TempDirectory $script:CleanupPaths.TempDirectory `
-        -OutputDirectory $script:CleanupPaths.OutputDirectory `
         -ChangelogPath $script:CleanupPaths.ChangelogPath `
         -StartTime $script:CleanupPaths.StartTime
     exit 1
