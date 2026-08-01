@@ -165,13 +165,26 @@ begin
   
   if IsUpgrade then
   begin
-    { Ask user for confirmation }
-    if MsgBox('A previous version of Easy MinGW Installer is installed.' + #13#10 + #13#10 +
-              'The old installation will be removed before installing the new version.' + #13#10 + #13#10 +
-              'Do you want to continue?', mbConfirmation, MB_YESNO) = IDNO then
+    { Ask the user for confirmation, but only when there is a user to ask.
+      PrepareToInstall still runs under /SILENT and /VERYSILENT, where this
+      MsgBox appears with no visible parent and blocks Setup until someone
+      finds and clicks it -- a headless deployment hangs until it is killed.
+      Passing /SILENT is itself consent to an unattended upgrade, so silent
+      runs proceed as if Yes was chosen.
+
+      Note: this is deliberately a nested if rather than
+      "if (not WizardSilent) and (MsgBox(...) = IDNO)". Pascal Script does not
+      guarantee short-circuit evaluation, so the combined form would still
+      call MsgBox during a silent install. }
+    if not WizardSilent then
     begin
-      Result := 'Installation cancelled by user.';
-      Exit;
+      if MsgBox('A previous version of Easy MinGW Installer is installed.' + #13#10 + #13#10 +
+                'The old installation will be removed before installing the new version.' + #13#10 + #13#10 +
+                'Do you want to continue?', mbConfirmation, MB_YESNO) = IDNO then
+      begin
+        Result := 'Installation cancelled by user.';
+        Exit;
+      end;
     end;
     
     { Create progress page }
