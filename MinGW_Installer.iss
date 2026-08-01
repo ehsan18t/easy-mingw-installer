@@ -33,6 +33,15 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
+; Without these the published setup.exe has a blank FileVersion and no company:
+; VersionInfoVersion defaults to 0.0.0.0 and is NOT derived from AppVersion.
+VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoProductName={#MyAppName}
+VersionInfoDescription={#MyAppName} {#Arch}-bit Setup
+; Only one architecture is ever installed, but nothing in the Add/Remove
+; Programs entry said which one. Without this it falls back to AppVerName.
+UninstallDisplayName={#MyAppName} ({#Arch}-bit)
 CreateAppDir=no
 PrivilegesRequired=admin
 OutputDir={#OutputPath}
