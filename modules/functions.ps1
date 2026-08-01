@@ -1176,7 +1176,10 @@ function Invoke-InstallerBuild {
         - /DMyOutputName="<OutputName>"  : Base output filename
         - /DMyAppVersion="<Version>"     : Version string
         - /DArch="<Architecture>"        : "32" or "64"
-        - /DSourcePath="<SourcePath>"    : Path to MinGW files
+        - /DMinGWSource="<SourcePath>"   : Path to MinGW files. NOT named
+          SourcePath: ISPP predefines that name as the .iss file's own
+          directory, so the script's #ifndef guard could never fire and a
+          missing value silently resolved to the repo root.
         - /DOutputPath="<OutputDir>"     : Output directory for .exe
         
         OUTPUT FILE NAMING:
@@ -1269,7 +1272,7 @@ function Invoke-InstallerBuild {
         "/DMyOutputName=`"$OutputName`""
         "/DMyAppVersion=`"$Version`""
         "/DArch=`"$Architecture`""
-        "/DSourcePath=`"$SourcePath`""
+        "/DMinGWSource=`"$SourcePath`""
         "/DOutputPath=`"$OutputDirectory`""
         "`"$IssPath`""
     ) -join ' '

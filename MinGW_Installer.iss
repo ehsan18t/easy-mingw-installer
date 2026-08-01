@@ -1,4 +1,7 @@
-#include "inno\Environment.iss"
+; Preprocessor directives and comments first. The Environment.iss include below
+; opens a [Code] section, so every line between it and [Setup] is Pascal source
+; -- a ';' comment placed after the include is parsed as code and fails with
+; "'BEGIN' expected".
 
 #define MyAppPublisher "Ehsan"
 #define MyAppURL "https://ehsan.pages.dev"
@@ -19,9 +22,17 @@
   #define Arch "64"
 #endif
 
-#ifndef SourcePath
-  #error "SourcePath not defined!"
+; Deliberately NOT called SourcePath. ISPP predefines a variable of that name
+; holding the directory of the .iss itself, so "#ifndef SourcePath" was always
+; false and this guard never fired. Compiling the script directly, without the
+; build passing a value, silently resolved {#MinGWSource} to the repo root and
+; failed later with a confusing message about a missing version_info.txt.
+#ifndef MinGWSource
+  #error "MinGWSource not defined. Pass /DMinGWSource=<extracted mingw dir> -- Builder.ps1 does this for you."
 #endif
+
+; Defines EnvironmentKeyPath and the [Code] EnvRemovePath used below.
+#include "inno\Environment.iss"
 
 [Setup]
 AppId={{078C8544-DE40-43A5-B293-58408E30C089}
@@ -52,11 +63,11 @@ UninstallFilesDir={sd}\MinGW{#Arch}
 PrivilegesRequired=admin
 OutputDir={#OutputPath}
 OutputBaseFilename="{#MyOutputName}.v{#MyAppVersion}.{#Arch}-bit"
-Compression=lzma2/ultra64  
+Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern dynamic
 ChangesEnvironment=yes
-InfoBeforeFile="{#SourcePath}\version_info.txt"
+InfoBeforeFile="{#MinGWSource}\version_info.txt"
 DisableWelcomePage=yes
 DisableDirPage=yes
 DisableProgramGroupPage=yes
@@ -73,11 +84,16 @@ InfoBeforeLabel=Details regarding the packages included in this build.
 SetupWindowTitle={#MyAppName} v{#MyAppVersion}
 
 [Files]
-Source: "{#SourcePath}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
+Source: "{#MinGWSource}\*"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; ignoreversion to match the line above: an .ico carries no version resource, so
+; without it Inno falls back to timestamps and can skip replacing the icon.
+Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}"; Flags: ignoreversion
 
 [Registry]
-; Add MinGW bin directory to system PATH (automatically removed on uninstall)
+; Prepend the MinGW bin directory to the system PATH. {olddata} preserves the
+; existing value, which is why this entry cannot carry uninsdeletevalue -- it
+; does not own the value it writes. Removal on uninstall is NOT automatic; it is
+; done explicitly by CurUninstallStepChanged at the bottom of [Code].
 Root: HKLM; Subkey: "{#EnvironmentKeyPath}"; \
   ValueType: expandsz; ValueName: "Path"; ValueData: "{sd}\MinGW{#Arch}\bin;{olddata}"; \
   Check: NeedsAddPath(ExpandConstant('{sd}\MinGW{#Arch}\bin'))
@@ -190,7 +206,10 @@ begin
                 'The existing installation will be removed before installing this version.' + #13#10 + #13#10 +
                 'Do you want to continue?', mbConfirmation, MB_YESNO) = IDNO then
       begin
-        Result := 'Installation cancelled by user.';
+        { Inno renders any non-empty return as an error message, so say plainly
+          that nothing happened rather than making a deliberate choice read as
+          a failure. }
+        Result := 'Setup was cancelled. Nothing was installed or removed.';
         Exit;
       end;
     end;
