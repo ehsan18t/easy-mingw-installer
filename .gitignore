@@ -8,6 +8,7 @@ mingw*/
 logs/
 tag/
 release_notes_body.md
+docs/superpowers/
 
 # Python cache
 **/__pycache__/
