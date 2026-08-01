@@ -1240,14 +1240,14 @@ function Invoke-ChangelogGeneration {
         return $false
     }
 
-    # Check if Python is available
-    $null = & python --version 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-ErrorMessage -ErrorType 'Changelog' -Message 'Python is not available'
+    $cfg = Get-BuildConfig
+
+    # Resolved by Find-Python: 'python' where it is on PATH, otherwise the 'py'
+    # launcher that every Windows Python install provides.
+    if (-not $cfg.PythonPath) {
+        Write-ErrorMessage -ErrorType 'Changelog' -Message 'Python is not available (tried EMI_PYTHON_PATH, python, py)'
         return $false
     }
-
-    $cfg = Get-BuildConfig
 
     $pyArgs = @(
         $pyScript
@@ -1273,8 +1273,8 @@ function Invoke-ChangelogGeneration {
 
     # Start Python process with tracking for cancellation
     $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processInfo.FileName = 'python'
-    $processInfo.Arguments = ($pyArgs | ForEach-Object { 
+    $processInfo.FileName = $cfg.PythonPath
+    $processInfo.Arguments = ($pyArgs | ForEach-Object {
         if ($_ -match '\s') { "`"$_`"" } else { $_ } 
     }) -join ' '
     $processInfo.UseShellExecute = $false
@@ -1844,7 +1844,14 @@ function Invoke-ArchitectureBuild {
                 $changelogParams['VersionInfoPath'] = $buildInfoPath
             }
             
-            $null = Invoke-ChangelogGeneration @changelogParams
+            # Do not discard the result. A failed changelog previously left the build
+            # reporting success with no release_notes_body.md, which the release
+            # workflow then publishes as an empty release body. Use -SkipChangelog to
+            # build deliberately without one.
+            if (-not (Invoke-ChangelogGeneration @changelogParams)) {
+                Write-ErrorMessage -ErrorType 'Changelog' -Message 'Generation failed; aborting this architecture'
+                return $false
+            }
         }
 
         # ========================

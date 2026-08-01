@@ -46,6 +46,7 @@
     - Find-Tool              : Searches Program Files for a tool
     - Find-SevenZip          : Locates 7-Zip executable
     - Find-InnoSetup         : Locates Inno Setup compiler
+    - Find-Python            : Locates a working Python interpreter
 
 .EXAMPLE
     # Basic usage in a script
@@ -177,6 +178,49 @@ function Find-InnoSetup {
     return Find-Tool 'Inno Setup 5\ISCC.exe'
 }
 
+function Find-Python {
+    <#
+    .SYNOPSIS
+        Locates a working Python interpreter.
+    .DESCRIPTION
+        Checks EMI_PYTHON_PATH first, then tries 'python' and finally the 'py'
+        launcher.
+
+        Both are needed on Windows: the official Python installer leaves "Add
+        python.exe to PATH" unchecked by default, so a stock install provides 'py'
+        but not 'python'. GitHub Actions runners with actions/setup-python provide
+        'python'. Hardcoding either one breaks half the cases.
+
+        Each candidate is executed with --version rather than merely resolved,
+        because Windows ships App Execution Aliases named python.exe that exist on
+        PATH but only open the Microsoft Store.
+    .OUTPUTS
+        [string] Command to invoke Python with, or $null if none works.
+    .EXAMPLE
+        $python = Find-Python
+        if (-not $python) { throw 'Python not available' }
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $envPath = Get-EnvOrDefault 'EMI_PYTHON_PATH'
+    $candidates = @()
+    if ($envPath) { $candidates += $envPath }
+    $candidates += @('python', 'py')
+
+    foreach ($candidate in $candidates) {
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if (-not $cmd) { continue }
+        $null = & $cmd.Source '--version' 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $cmd.Source
+        }
+    }
+
+    return $null
+}
+
 function Get-BuildConfig {
     <#
     .SYNOPSIS
@@ -201,6 +245,8 @@ function Get-BuildConfig {
         TOOL PATHS:
         - SevenZipPath   : Path to 7z.exe (auto-detected or override)
         - InnoSetupPath  : Path to ISCC.exe (auto-detected or override)
+        - PythonPath     : Python command, 'python' or the 'py' launcher
+                           (auto-detected, override with EMI_PYTHON_PATH)
         
         DIRECTORIES:
         - TempDirectory  : Temp folder for downloads and extraction
@@ -284,6 +330,7 @@ function Get-BuildConfig {
         # Auto-detected during initialization, can be overridden
         SevenZipPath      = $null
         InnoSetupPath     = $null
+        PythonPath        = $null
 
         # ========================
         # Directories
@@ -418,6 +465,10 @@ function Initialize-BuildConfig {
     else {
         $cfg.InnoSetupPath = Find-InnoSetup
     }
+
+    # Python is only needed for changelog generation, so a null here is not fatal;
+    # Invoke-ChangelogGeneration reports it.
+    $cfg.PythonPath = Find-Python
 
     # ========================
     # Mode Flags

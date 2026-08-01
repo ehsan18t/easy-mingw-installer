@@ -35,8 +35,13 @@
     - CI MODE: Automatically detected in GitHub Actions environment
 
 .PARAMETER TitlePattern
-    Wildcard pattern to match WinLibs release titles (e.g., "*UCRT*POSIX*").
-    This filters which GitHub release to use as the source.
+    Wildcard pattern to match WinLibs release titles. Filters which GitHub release
+    to use as the source.
+
+    Matched with -like, which is ORDER SENSITIVE. A real title looks like
+    "GCC 16.1.0 (POSIX threads) + MinGW-w64 14.0.0 UCRT (release 4)", so the terms
+    must appear in that order: "*POSIX*UCRT*" matches, "*UCRT*POSIX*" never does.
+    To pin a major version, use "*CC 16*POSIX*UCRT*".
 
 .PARAMETER Archs
     Array of architectures to build: "64", "32", or both @("64", "32").
@@ -140,17 +145,20 @@
 
 [CmdletBinding()]
 param(
-    # WinLibs release title pattern (e.g., "*UCRT*POSIX*")
+    # WinLibs release title pattern.
+    # -like is order-sensitive and real titles read
+    # "GCC 16.1.0 (POSIX threads) + MinGW-w64 14.0.0 UCRT (release 4)",
+    # so POSIX must come before UCRT here.
     [Parameter()]
-    [string]$TitlePattern = '*UCRT*POSIX*',
+    [string]$TitlePattern = '*POSIX*UCRT*',
 
     # Architectures to build (e.g., @('64', '32'))
     [Parameter()]
     [string[]]$Archs = @('64'),
 
-    # Asset name patterns for each architecture (regex)
+    # Asset name patterns for each architecture (regex), one per entry in -Archs
     [Parameter()]
-    [string[]]$NamePatterns = @('.*ucrt-runtime.*posix.*without-llvm.*\.7z$'),
+    [string[]]$NamePatterns = @('winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-.*\.7z$'),
 
     # Output directory for built installers
     [Parameter()]
