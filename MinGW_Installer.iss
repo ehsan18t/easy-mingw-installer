@@ -76,9 +76,12 @@ const
   CN_COMMAND = CN_BASE + WM_COMMAND;
 
 var
-  MinGWDir: string;    { Initialized in InitializeSetup }
-  MinGWBinDir: string; { Initialized in InitializeSetup }
-  IsUpgrade: Boolean;  { True if existing installation found }
+  MinGWDir: string;      { Initialized in InitializeSetup }
+  MinGWBinDir: string;   { Initialized in InitializeSetup }
+  OtherDir: string;      { The other architecture's install, if any }
+  OtherBinDir: string;   { Initialized in InitializeSetup }
+  IsUpgrade: Boolean;    { True if this architecture is already installed }
+  HasOtherArch: Boolean; { True if the other architecture is installed }
 
 function NeedsAddPath(Path: string): Boolean;
 var
@@ -95,7 +98,24 @@ function InitializeSetup: Boolean;
 begin
   MinGWDir := ExpandConstant('{sd}\MinGW{#Arch}');
   MinGWBinDir := MinGWDir + '\bin';
-  IsUpgrade := DirExists(MinGWDir);
+
+  { Only one architecture may be installed at a time. Both builds put a gcc.exe
+    on the system PATH, and whichever entry comes first silently wins, so a
+    32-bit install left sitting next to a 64-bit one hands the user a toolchain
+    they did not ask for. Installing either build therefore replaces the other.
+
+    Sharing one AppId across both architectures is deliberate -- it keeps a
+    single Add/Remove Programs entry -- but it does NOT make Inno remove the
+    other build. Same AppId means Setup *appends* to the existing uninstall log.
+    The replacement has to be done here. }
+  if '{#Arch}' = '64' then
+    OtherDir := ExpandConstant('{sd}\MinGW32')
+  else
+    OtherDir := ExpandConstant('{sd}\MinGW64');
+  OtherBinDir := OtherDir + '\bin';
+
+  IsUpgrade    := DirExists(MinGWDir);
+  HasOtherArch := DirExists(OtherDir);
   Result := True;
 end;
 
@@ -156,14 +176,37 @@ begin
   RemoveDir(Dir);
 end;
 
+{ Removes one installation and its PATH entry. Safe to call for a directory that
+  does not exist, which is what lets the caller ask for both architectures
+  unconditionally. }
+procedure RemoveInstallation(const Dir, BinDir: string; ProgressPage: TOutputProgressWizardPage);
+var
+  TotalFiles, CurrentFile: Integer;
+begin
+  if not DirExists(Dir) then
+    Exit;
+
+  ProgressPage.SetText('Counting files...', '');
+  TotalFiles := CountFiles(Dir);
+  if TotalFiles = 0 then
+    TotalFiles := 1; { Avoid division by zero }
+  CurrentFile := 0;
+
+  { PATH entry first: if the delete then fails part-way, the user is left with a
+    stale directory rather than a PATH entry pointing into a half-deleted tree. }
+  EnvRemovePath(BinDir);
+  DeleteDirWithProgress(Dir, ProgressPage, CurrentFile, TotalFiles);
+  ProgressPage.SetProgress(TotalFiles, TotalFiles);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ProgressPage: TOutputProgressWizardPage;
-  TotalFiles, CurrentFile: Integer;
+  Prompt: string;
 begin
   Result := '';
   
-  if IsUpgrade then
+  if IsUpgrade or HasOtherArch then
   begin
     { Ask the user for confirmation, but only when there is a user to ask.
       PrepareToInstall still runs under /SILENT and /VERYSILENT, where this
@@ -178,38 +221,39 @@ begin
       call MsgBox during a silent install. }
     if not WizardSilent then
     begin
-      if MsgBox('A previous version of Easy MinGW Installer is installed.' + #13#10 + #13#10 +
-                'The old installation will be removed before installing the new version.' + #13#10 + #13#10 +
+      Prompt := '';
+      if IsUpgrade then
+        Prompt := 'A previous version of Easy MinGW Installer is installed.' + #13#10;
+      if HasOtherArch then
+        Prompt := Prompt +
+                  'A different architecture is installed at ' + OtherDir + '.' + #13#10 +
+                  'Only one architecture can be installed at a time, because both' + #13#10 +
+                  'add a compiler to the system PATH.' + #13#10;
+
+      if MsgBox(Prompt + #13#10 +
+                'The existing installation will be removed before installing this version.' + #13#10 + #13#10 +
                 'Do you want to continue?', mbConfirmation, MB_YESNO) = IDNO then
       begin
         Result := 'Installation cancelled by user.';
         Exit;
       end;
     end;
-    
+
     { Create progress page }
     ProgressPage := CreateOutputProgressPage('Removing Previous Version',
       'Please wait while the previous installation is being removed...');
     
     try
       ProgressPage.Show;
-      ProgressPage.SetText('Counting files...', '');
       ProgressPage.SetProgress(0, 100);
-      
-      { Count files for progress bar }
-      TotalFiles := CountFiles(MinGWDir);
-      if TotalFiles = 0 then
-        TotalFiles := 1; { Avoid division by zero }
-      
-      CurrentFile := 0;
-      
-      { Remove PATH entry first (in case it's different from new path) }
-      EnvRemovePath(MinGWBinDir);
-      
-      { Delete with progress }
-      DeleteDirWithProgress(MinGWDir, ProgressPage, CurrentFile, TotalFiles);
-      
-      ProgressPage.SetProgress(TotalFiles, TotalFiles);
+
+      { This architecture first, then the other one. Each call is a no-op when
+        its directory is absent, so one pair of calls covers all three cases:
+        a same-arch upgrade, an architecture switch, and a machine that ended
+        up with both installed before this replacement logic existed. }
+      RemoveInstallation(MinGWDir, MinGWBinDir, ProgressPage);
+      RemoveInstallation(OtherDir, OtherBinDir, ProgressPage);
+
       ProgressPage.SetText('Removal complete!', '');
       Sleep(500); { Brief pause to show completion }
       
