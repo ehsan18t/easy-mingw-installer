@@ -119,7 +119,7 @@ function Find-Tool {
         2. Each -SubPaths candidate under each Program Files location, in the order
            given. Candidates are tried outer-first, so an earlier candidate found in
            any Program Files directory beats a later candidate found in the first
-           one. That is what makes Inno Setup 6 win over Inno Setup 5.
+           one.
 
         Program Files locations searched: %ProgramFiles%, %ProgramFiles(x86)%, and
         the literal C: paths as a fallback for a 32-bit host process where the
@@ -127,7 +127,7 @@ function Find-Tool {
 
     .PARAMETER SubPaths
         One or more paths relative to a Program Files directory, in priority order.
-        Example: 'Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe'
+        Example: '7-Zip\7z.exe', 'Inno Setup 6\ISCC.exe'
 
     .PARAMETER EnvVar
         Name of an environment variable holding an explicit full path.
@@ -140,9 +140,7 @@ function Find-Tool {
         $sevenZip = Find-Tool -SubPaths '7-Zip\7z.exe' -EnvVar 'EMI_7ZIP_PATH'
 
     .EXAMPLE
-        # Prefer Inno Setup 6, fall back to 5
-        $iscc = Find-Tool -SubPaths 'Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe' `
-                          -EnvVar 'EMI_INNOSETUP_PATH'
+        $iscc = Find-Tool -SubPaths 'Inno Setup 6\ISCC.exe' -EnvVar 'EMI_INNOSETUP_PATH'
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -452,8 +450,11 @@ function Initialize-BuildConfig {
         $cfg.InnoSetupPath = $Overrides.InnoSetupPath
     }
     else {
-        $cfg.InnoSetupPath = Find-Tool -SubPaths 'Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe' `
-                                       -EnvVar 'EMI_INNOSETUP_PATH'
+        # No Inno Setup 5 fallback: MinGW_Installer.iss uses WizardStyle, which
+        # does not exist before Inno Setup 6, and the 'dynamic' appearance mode
+        # needs 6.6.0. Finding an ISCC that cannot compile the script only turns
+        # a clear "not installed" message into a confusing directive error.
+        $cfg.InnoSetupPath = Find-Tool -SubPaths 'Inno Setup 6\ISCC.exe' -EnvVar 'EMI_INNOSETUP_PATH'
     }
 
     # Python is only needed for changelog generation, so a null here is not fatal;

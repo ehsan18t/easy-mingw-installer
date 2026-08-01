@@ -1230,7 +1230,8 @@ function Invoke-InstallerBuild {
             -IssPath '.\MinGW_Installer.iss'
     
     .NOTES
-        Requires Inno Setup 5 or 6 to be installed.
+        Requires Inno Setup 6.6.0 or later (the script's WizardStyle uses the
+        'dynamic' appearance mode, added in 6.6.0).
         ISCC.exe path is obtained from Get-BuildConfig.
     #>
     [CmdletBinding()]

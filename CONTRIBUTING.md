@@ -230,7 +230,11 @@ Python script that:
 
 1. **PowerShell 5.1+** (included in Windows 10+)
 2. **7-Zip** - [Download](https://7-zip.org/)
-3. **Inno Setup 5 or 6** - [Download](https://jrsoftware.org/isinfo.php)
+3. **Inno Setup 6.6.0 or later** - [Download](https://jrsoftware.org/isdl.php).
+   Not optional and not "6 or later": `MinGW_Installer.iss` sets
+   `WizardStyle=modern dynamic`, and the `dynamic` appearance mode that follows
+   the Windows light/dark setting was added in 6.6.0. The script checks this and
+   fails the compile with a clear message on anything older.
 4. **Python 3.8+** with `requests` (for changelog generation). Either `python` or
    the `py` launcher works; the Windows installer leaves "Add python.exe to PATH"
    unchecked by default, so a stock install provides only `py`. Install the

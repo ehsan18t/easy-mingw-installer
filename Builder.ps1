@@ -123,7 +123,7 @@
 
 .NOTES
     File Name      : Builder.ps1
-    Prerequisite   : PowerShell 5.1+, 7-Zip, Inno Setup 5/6
+    Prerequisite   : PowerShell 5.1+, 7-Zip, Inno Setup 6.6.0+
     
     Environment Variables:
         EMI_LOG_LEVEL      - Logging verbosity: Verbose, Normal, Quiet

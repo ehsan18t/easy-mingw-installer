@@ -3,6 +3,14 @@
 ; -- a ';' comment placed after the include is parsed as code and fails with
 ; "'BEGIN' expected".
 
+; WizardStyle's "dynamic" appearance mode (automatic light/dark) landed in Inno
+; Setup 6.6.0. On anything older the directive below is rejected and the error
+; points at a line the contributor did not write, so fail early and say why.
+; WizardStyle itself does not exist at all in Inno Setup 5.
+#if VER < EncodeVer(6,6,0)
+  #error "Inno Setup 6.6.0 or later is required (WizardStyle 'dynamic'). Download: https://jrsoftware.org/isdl.php"
+#endif
+
 #define MyAppPublisher "Ehsan"
 #define MyAppURL "https://ehsan.pages.dev"
 

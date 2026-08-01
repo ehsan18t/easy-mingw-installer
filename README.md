@@ -108,7 +108,7 @@ https://github.com/ehsan18t/easy-mingw-installer/assets/30434801/f5bc4e12-ba8f-4
   <summary> ✔️ Can I build a installer myself?</summary>
 <br>
 
->  🅰️ Yes, all you have to install 7zip, Inno Setup and run the run.bat file. The rest will be handled by the scripts that I've created.
+>  🅰️ Yes, all you have to install 7zip, Inno Setup 6.6.0 or later, and run the run.bat file. The rest will be handled by the scripts that I've created.
 
 </details>
 
