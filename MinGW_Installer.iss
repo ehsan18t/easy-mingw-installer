@@ -119,93 +119,32 @@ begin
   Result := True;
 end;
 
-function CountFiles(const Dir: string): Integer;
-var
-  FindRec: TFindRec;
-  SubDir: string;
-begin
-  Result := 0;
-  if FindFirst(Dir + '\*', FindRec) then
-  begin
-    try
-      repeat
-        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
-        begin
-          Inc(Result);
-          { Recursively count files in subdirectories }
-          if FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
-          begin
-            SubDir := Dir + '\' + FindRec.Name;
-            Result := Result + CountFiles(SubDir);
-          end;
-        end;
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
-    end;
-  end;
-end;
+{ Removes one installation and its PATH entry. Returns False if the tree could
+  not be fully deleted, which in practice means a file is still locked by a
+  running gcc.exe, gdb.exe or a shell sitting in the directory.
 
-procedure DeleteDirWithProgress(const Dir: string; ProgressPage: TOutputProgressWizardPage; var CurrentFile, TotalFiles: Integer);
-var
-  FindRec: TFindRec;
-  SubDir: string;
+  Safe to call for a directory that does not exist, which is what lets the
+  caller ask for both architectures unconditionally. }
+function RemoveInstallation(const Dir, BinDir: string): Boolean;
 begin
-  if FindFirst(Dir + '\*', FindRec) then
-  begin
-    try
-      repeat
-        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
-        begin
-          SubDir := Dir + '\' + FindRec.Name;
-          if FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
-            DeleteDirWithProgress(SubDir, ProgressPage, CurrentFile, TotalFiles)
-          else
-          begin
-            DeleteFile(SubDir);
-            Inc(CurrentFile);
-            ProgressPage.SetProgress(CurrentFile, TotalFiles);
-            ProgressPage.SetText('Removing old installation...', FindRec.Name);
-          end;
-        end;
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
-    end;
-  end;
-  RemoveDir(Dir);
-end;
-
-{ Removes one installation and its PATH entry. Safe to call for a directory that
-  does not exist, which is what lets the caller ask for both architectures
-  unconditionally. }
-procedure RemoveInstallation(const Dir, BinDir: string; ProgressPage: TOutputProgressWizardPage);
-var
-  TotalFiles, CurrentFile: Integer;
-begin
+  Result := True;
   if not DirExists(Dir) then
     Exit;
-
-  ProgressPage.SetText('Counting files...', '');
-  TotalFiles := CountFiles(Dir);
-  if TotalFiles = 0 then
-    TotalFiles := 1; { Avoid division by zero }
-  CurrentFile := 0;
 
   { PATH entry first: if the delete then fails part-way, the user is left with a
     stale directory rather than a PATH entry pointing into a half-deleted tree. }
   EnvRemovePath(BinDir);
-  DeleteDirWithProgress(Dir, ProgressPage, CurrentFile, TotalFiles);
-  ProgressPage.SetProgress(TotalFiles, TotalFiles);
+  Result := DelTree(Dir, True, True, True);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ProgressPage: TOutputProgressWizardPage;
   Prompt: string;
+  Removed: Boolean;
 begin
   Result := '';
-  
+
   if IsUpgrade or HasOtherArch then
   begin
     { Ask the user for confirmation, but only when there is a user to ask.
@@ -245,18 +184,35 @@ begin
     
     try
       ProgressPage.Show;
-      ProgressPage.SetProgress(0, 100);
+      ProgressPage.SetText('Removing previous installation...', '');
+      ProgressPage.SetProgress(0, 2);
 
       { This architecture first, then the other one. Each call is a no-op when
         its directory is absent, so one pair of calls covers all three cases:
         a same-arch upgrade, an architecture switch, and a machine that ended
-        up with both installed before this replacement logic existed. }
-      RemoveInstallation(MinGWDir, MinGWBinDir, ProgressPage);
-      RemoveInstallation(OtherDir, OtherBinDir, ProgressPage);
+        up with both installed before this replacement logic existed.
 
-      ProgressPage.SetText('Removal complete!', '');
-      Sleep(500); { Brief pause to show completion }
-      
+        Both calls are made unconditionally and the results combined afterwards.
+        Folding them into one expression would risk the second being skipped,
+        since Pascal Script does not guarantee short-circuit evaluation. }
+      Removed := RemoveInstallation(MinGWDir, MinGWBinDir);
+      ProgressPage.SetProgress(1, 2);
+      if not RemoveInstallation(OtherDir, OtherBinDir) then
+        Removed := False;
+      ProgressPage.SetProgress(2, 2);
+
+      { A locked file used to fail silently: DeleteFile's result was discarded
+        and the page still reported success, so Setup went on to install over a
+        half-removed tree.
+
+        Unlike the confirmation prompt above, this is a real error and must stop
+        the install. Inno shows it in a message box, which under /SILENT blocks
+        exactly like any other Setup error, so unattended callers should pass
+        /SUPPRESSMSGBOXES -- they then get exit code 7 instead of a hang. }
+      if not Removed then
+        Result := 'The previous installation could not be fully removed.' + #13#10 + #13#10 +
+                  'Close anything using MinGW -- a terminal, an editor, a running' + #13#10 +
+                  'gcc or gdb -- and run Setup again.';
     finally
       ProgressPage.Hide;
     end;
