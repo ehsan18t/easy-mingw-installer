@@ -28,11 +28,18 @@
        - Cleans up temporary files
        - Displays build summary
 
-    The script supports multiple modes:
-    - NORMAL MODE: Full build with downloads, compilation, and output
-    - TEST MODE: Uses mock fixtures for rapid pipeline testing
-    - OFFLINE MODE: Skips network requests, uses existing files
-    - CI MODE: Automatically detected in GitHub Actions environment
+    The script supports these modes:
+    - NORMAL:        Full build. Downloads the archive, generates the changelog,
+                     compiles the installer.
+    - -SkipDownload: Everything a normal build does except transferring the archive.
+                     The MinGW payload is replaced with generated fixtures, so the
+                     resulting installer is a structural test artifact, not a usable
+                     toolchain. The release lookup, asset match, changelog and Inno
+                     Setup compile all run for real.
+    - -OfflineMode:  No network requests at all. Fixtures for the payload, no
+                     changelog, version is today's date. Use to verify the Inno
+                     Setup script with no connectivity.
+    - CI MODE:       Detected automatically in GitHub Actions; adjusts output only.
 
 .PARAMETER TitlePattern
     Wildcard pattern to match WinLibs release titles. Filters which GitHub release
@@ -62,20 +69,10 @@
     Path to ISCC.exe (Inno Setup Compiler). Auto-detected if not specified.
     Can also be set via EMI_INNOSETUP_PATH environment variable.
 
-.PARAMETER TestMode
-    Enables test mode: uses mock data and test fixtures instead of real downloads.
-    Useful for testing the build pipeline without network access.
-
-.PARAMETER ValidateAssets
-    When used with -TestMode, validates that release assets exist via API
-    before proceeding with test fixtures.
-
-.PARAMETER GenerateChangelog
-    When used with -TestMode, fetches real release data to generate
-    an actual changelog instead of a test placeholder.
-
 .PARAMETER OfflineMode
-    Skips all network requests. Use with existing downloaded files.
+    Makes no network requests at all: no release lookup, no download, no changelog.
+    The MinGW payload is replaced with generated fixtures and the version is today's
+    date. The temp directory is kept so the generated tree can be inspected.
 
 .PARAMETER CleanFirst
     Removes the temp directory before starting the build.
@@ -85,7 +82,10 @@
     Skips build if versions match (already up-to-date).
 
 .PARAMETER SkipDownload
-    Skips downloading MinGW archives. Use existing files in temp.
+    Skips only the archive transfer, replacing the MinGW payload with generated
+    fixtures. The release lookup, asset pattern match, changelog generation and Inno
+    Setup compile all run exactly as in a normal build. The temp directory is kept so
+    the generated tree can be inspected.
 
 .PARAMETER SkipBuild
     Skips the Inno Setup compilation step.
@@ -108,12 +108,13 @@
     # Build both 64-bit and 32-bit installers
 
 .EXAMPLE
-    .\Builder.ps1 -TestMode
-    # Test the build pipeline with mock data
+    .\Builder.ps1 -SkipDownload
+    # Exercise the whole pipeline without the 200MB download. Real release lookup,
+    # real changelog, real installer built around fixture files.
 
 .EXAMPLE
-    .\Builder.ps1 -TestMode -ValidateAssets -GenerateChangelog
-    # Test mode but validate real assets and generate real changelog
+    .\Builder.ps1 -OfflineMode
+    # No network at all. Verifies the Inno Setup script compiles and packages.
 
 .EXAMPLE
     .\Builder.ps1 -CheckNewRelease
@@ -175,15 +176,6 @@ param(
     # ========================
     # MODE SWITCHES
     # ========================
-
-    # Test mode: uses mock data and test fixtures instead of downloads
-    [switch]$TestMode,
-
-    # Validate that release assets exist (makes API calls, but doesn't download)
-    [switch]$ValidateAssets,
-
-    # Generate changelog in test mode (fetches real release for changelog generation)
-    [switch]$GenerateChangelog,
 
     # Offline mode: skip all network requests
     [switch]$OfflineMode,
@@ -252,43 +244,21 @@ if ($NamePatterns.Count -eq 1 -and $NamePatterns[0].Contains(',')) {
 # Configuration Initialization
 # ============================================================================
 
-# Build configuration overrides from parameters
+# Build configuration overrides from parameters.
+# Switch parameter names match config property names exactly, so one loop covers
+# them all. Only bound parameters are forwarded, which lets Initialize-BuildConfig
+# distinguish "not specified" from "explicitly set to false".
 $configOverrides = @{}
 
-if ($TestMode) {
-    $configOverrides['IsTestMode'] = $true
-}
-if ($PSBoundParameters.ContainsKey('ValidateAssets')) {
-    $configOverrides['ValidateAssets'] = $ValidateAssets.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('GenerateChangelog')) {
-    $configOverrides['GenerateChangelog'] = $GenerateChangelog.IsPresent
-    # GenerateChangelog implies we don't skip changelog
-    if ($GenerateChangelog.IsPresent) {
-        $configOverrides['SkipChangelog'] = $false
+foreach ($name in @(
+        'OfflineMode', 'CleanFirst', 'SkipDownload', 'SkipBuild',
+        'SkipChangelog', 'SkipHashes', 'GenerateLogsAlways')) {
+    if ($PSBoundParameters.ContainsKey($name)) {
+        $configOverrides[$name] = $PSBoundParameters[$name].IsPresent
     }
 }
-if ($PSBoundParameters.ContainsKey('OfflineMode')) {
-    $configOverrides['OfflineMode'] = $OfflineMode.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('CleanFirst')) {
-    $configOverrides['CleanFirst'] = $CleanFirst.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('SkipDownload')) {
-    $configOverrides['SkipDownload'] = $SkipDownload.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('SkipBuild')) {
-    $configOverrides['SkipBuild'] = $SkipBuild.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('SkipChangelog')) {
-    $configOverrides['SkipChangelog'] = $SkipChangelog.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('SkipHashes')) {
-    $configOverrides['SkipHashes'] = $SkipHashes.IsPresent
-}
-if ($PSBoundParameters.ContainsKey('GenerateLogsAlways')) {
-    $configOverrides['GenerateLogsAlways'] = $GenerateLogsAlways.IsPresent
-}
+
+# Tool paths are strings, not switches, and only override when non-empty.
 if ($SevenZipPath) {
     $configOverrides['SevenZipPath'] = $SevenZipPath
 }
@@ -382,63 +352,32 @@ try {
     $releaseDate = (Get-Date).ToString('yyyy-MM-dd')
     $release = $null
 
-    if ($cfg.IsTestMode) {
-        # Test mode: use mock data by default
-        $version = $cfg.TestModeVersion
-        $previousTag = $version
-        $release = @{ name = 'Test Release'; assets = @() }
-        
-        # If ValidateAssets or GenerateChangelog is set, fetch real release data
-        if ($cfg.ValidateAssets -or $cfg.GenerateChangelog) {
-            Write-StatusInfo -Type 'Test Mode' -Message 'Fetching real release for validation/changelog...'
-            
-            $realRelease = Find-GitHubRelease -Owner $cfg.WinLibsOwner -Repo $cfg.WinLibsRepo -TitlePattern $TitlePattern
-            if ($realRelease) {
-                $release = $realRelease
-                Write-StatusInfo -Type 'Real Release' -Message $realRelease.name
-            }
-            else {
-                Write-WarningMessage -Type 'Validation' -Message "No release matches pattern: $TitlePattern"
-            }
-            
-            # Get last 2 tags for changelog generation (compare between our releases)
-            if ($cfg.GenerateChangelog) {
-                $recentTags = Get-GitHubTags -Owner $cfg.ProjectOwner -Repo $cfg.ProjectRepo -Count 2
-                if ($recentTags.Count -ge 2) {
-                    # Use latest tag as version, second-to-last as previous
-                    $version = $recentTags[0]
-                    $previousTag = $recentTags[1]
-                    Write-StatusInfo -Type 'Current Tag' -Message $version
-                    Write-StatusInfo -Type 'Previous Tag' -Message $previousTag
-                }
-                elseif ($recentTags.Count -eq 1) {
-                    $version = $recentTags[0]
-                    $previousTag = $null
-                    Write-StatusInfo -Type 'Current Tag' -Message $version
-                    Write-WarningMessage -Type 'Changelog' -Message 'No previous tag found for comparison'
-                }
-                else {
-                    Write-WarningMessage -Type 'Changelog' -Message 'No tags found - using test version'
-                }
-            }
-            elseif ($realRelease) {
-                # Just validating assets - use release date as version
-                $publishedDate = [datetime]$realRelease.published_at
-                $version = $publishedDate.ToString('yyyy.MM.dd')
-                $releaseDate = $publishedDate.ToString('yyyy-MM-dd')
-            }
-        }
-        else {
-            Write-StatusInfo -Type 'Version' -Message "$version (test mode)"
-        }
+    if ($cfg.OfflineMode) {
+        # No network. There is no release to query, so derive a version from today's
+        # date and hand the pipeline an empty release object. SkipDownload and
+        # SkipChangelog are already set by Initialize-BuildConfig.
+        $version = (Get-Date).ToString('yyyy.MM.dd')
+        $release = [PSCustomObject]@{ name = 'Offline Build'; assets = @() }
+        Write-StatusInfo -Type 'Offline' -Message "Version $version (no network requests)"
     }
     else {
-        # Get project's latest tag for comparison
-        if ($CheckNewRelease) {
-            $previousTag = Get-LatestGitHubTag -Owner $cfg.ProjectOwner -Repo $cfg.ProjectRepo
-            if ($previousTag) {
-                Write-StatusInfo -Type 'Current Tag' -Message $previousTag
-            }
+        # Normal and -SkipDownload take the same path. -SkipDownload differs only in
+        # that Invoke-ArchitectureBuild does not transfer the archive.
+
+        # Always fetch the project's latest tag. -CheckNewRelease uses it to decide
+        # whether to build at all, and the changelog uses it as the diff baseline and
+        # for the "Full Changelog" compare link. Fetching it only under
+        # -CheckNewRelease left the changelog with a literal TODO placeholder on a
+        # plain build. Invoke-GitHubApi caches, so this is one request per run.
+        # The @() is load-bearing: a single-element result must not arrive here as a
+        # bare string, or $projectTags[0] would index into it and yield '2'.
+        $projectTags = @(Get-GitHubTags -Owner $cfg.ProjectOwner -Repo $cfg.ProjectRepo -Count 1)
+        $previousTag = if ($projectTags.Count -gt 0) { $projectTags[0] } else { $null }
+        if ($previousTag) {
+            Write-StatusInfo -Type 'Previous Tag' -Message $previousTag
+        }
+        else {
+            Write-WarningMessage -Type 'Changelog' -Message 'No previous tag found; comparison will be skipped'
         }
 
         # Find matching WinLibs release
@@ -456,26 +395,25 @@ try {
         Write-StatusInfo -Type 'Target Version' -Message $version
         Write-StatusInfo -Type 'Release Date' -Message $releaseDate
 
-        if ($cfg.IsGitHubActions) {
-            # write file inside tags folder with the name of the version
-            # NOTE: this must live outside $cfg.TempDirectory because temp is cleaned up in finally.
-            # Recreate the directory each run so it holds exactly one tag file. A stale
-            # file from an earlier run would otherwise be picked up by the release
-            # workflow and published under the wrong version.
+        # The release workflow reads this file to decide which tag to push, so only a
+        # real build may produce one. Recreate the directory so it holds exactly one
+        # file: a stale entry from an earlier run would be published under the wrong
+        # version. Must live outside $cfg.TempDirectory, which is cleaned in finally.
+        if ($cfg.IsGitHubActions -and -not $cfg.SkipDownload) {
             $tagsDir = Join-Path -Path $PSScriptRoot -ChildPath 'tag'
             if (Test-Path $tagsDir) {
                 Remove-Item $tagsDir -Recurse -Force
             }
             New-Item -ItemType Directory -Path $tagsDir -Force | Out-Null
-            $versionFilePath = Join-Path -Path $tagsDir -ChildPath $version
-            Set-Content -Path $versionFilePath -Value $version -Encoding utf8 -NoNewline
+            Set-Content -Path (Join-Path $tagsDir $version) -Value $version -Encoding utf8 -NoNewline
         }
     }
 
     # ========================
     # Version Check (Skip if up-to-date)
     # ========================
-    if ($CheckNewRelease -and -not $cfg.IsTestMode -and $previousTag -eq $version) {
+    # Offline mode has no tag to compare against, so it can never be "up to date".
+    if ($CheckNewRelease -and -not $cfg.OfflineMode -and $previousTag -eq $version) {
         Write-SeparatorLine -Character '=' -Length 50
         Write-SuccessMessage -Type 'Up to Date' -Message "Already at version $version - no build required"
         $buildSuccess = $true
@@ -485,12 +423,6 @@ try {
         # Build Each Architecture
         # ========================
         $buildSuccess = $true
-        
-        # In test mode with GenerateChangelog, pass current tag to fetch from GitHub
-        $currentTagForChangelog = $null
-        if ($cfg.IsTestMode -and $cfg.GenerateChangelog) {
-            $currentTagForChangelog = $version
-        }
 
         for ($i = 0; $i -lt $Archs.Count; $i++) {
             $arch = $Archs[$i]
@@ -503,7 +435,6 @@ try {
                 -Version $version `
                 -Date $releaseDate `
                 -PreviousTag $previousTag `
-                -CurrentTag $currentTagForChangelog `
                 -OutputDirectory $outputDir `
                 -TempDirectory $cfg.TempDirectory `
                 -IssPath $issPath `
@@ -564,12 +495,15 @@ finally {
     # ========================
     # Cleanup Temp Directory
     # ========================
-    if (-not $cfg.IsTestMode -and (Test-Path $cfg.TempDirectory)) {
+    # Fixture-based runs keep the temp directory so the generated tree can be
+    # inspected. A real build always cleans up.
+    $keepTemp = $cfg.SkipDownload -or $cfg.OfflineMode
+    if (-not $keepTemp -and (Test-Path $cfg.TempDirectory)) {
         Write-VerboseLog "Cleaning up temp directory: $($cfg.TempDirectory)"
         Remove-Item $cfg.TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
-    elseif ($cfg.IsTestMode) {
-        Write-StatusInfo -Type 'Cleanup' -Message "Skipped (test mode) - Temp: $($cfg.TempDirectory)"
+    elseif ($keepTemp) {
+        Write-StatusInfo -Type 'Cleanup' -Message "Skipped (fixture mode) - Temp: $($cfg.TempDirectory)"
     }
 
     # ========================

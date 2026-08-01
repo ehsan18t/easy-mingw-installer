@@ -12,15 +12,6 @@ SET "buildOnlyIfNewRelease=1"
 @REM Logging: Set to 1 to always generate build logs (not just on errors)
 SET "generateLogsAlways=0"
 
-@REM Test mode: Set to 1 to run in test mode (no downloads, uses fixtures)
-SET "testMode=0"
-
-@REM Test mode flags:
-@REM   validateAssets - Verify release assets exist via API (no download)
-@REM   generateChangelog - Generate real changelog from last release
-SET "validateAssets=1"
-SET "generateChangelog=1"
-
 @REM Offline mode: Set to 1 to skip all network requests (use existing files)
 SET "offlineMode=0"
 
@@ -98,9 +89,6 @@ IF DEFINED SevenZip ( SET PowerShellCmd=%PowerShellCmd% -SevenZipPath "%SevenZip
 @REM Add optional flags
 IF "%buildOnlyIfNewRelease%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -CheckNewRelease )
 IF "%generateLogsAlways%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -GenerateLogsAlways )
-IF "%testMode%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -TestMode )
-IF "%validateAssets%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -ValidateAssets )
-IF "%generateChangelog%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -GenerateChangelog )
 IF "%offlineMode%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -OfflineMode )
 IF "%cleanFirst%"=="1" ( SET PowerShellCmd=%PowerShellCmd% -CleanFirst )
 

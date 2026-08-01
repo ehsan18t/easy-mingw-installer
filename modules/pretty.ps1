@@ -346,17 +346,19 @@ function Write-BuildInfo {
 
     # Mode Information
     Write-BuildInfoLine -Label 'Mode' -Value $(
-        if ($Config.IsTestMode) { 'TEST MODE' }
+        if ($Config.OfflineMode)         { 'OFFLINE (no network)' }
+        elseif ($Config.SkipDownload)    { 'TEST (fixtures, no download)' }
         elseif ($Config.IsGitHubActions) { 'GitHub Actions' }
-        else { 'Normal' }
-    ) -ValueColor $(if ($Config.IsTestMode) { 'Yellow' } else { 'Green' })
+        else                             { 'Normal' }
+    ) -ValueColor $(if ($Config.OfflineMode -or $Config.SkipDownload) { 'Yellow' } else { 'Green' })
 
-    # Active Flags
+    # Active Flags. SkipDownload is omitted: the Mode line already states it.
     $flags = @()
-    if ($Config.SkipDownload) { $flags += 'SkipDownload' }
     if ($Config.SkipBuild) { $flags += 'SkipBuild' }
     if ($Config.SkipChangelog) { $flags += 'SkipChangelog' }
-    
+    if ($Config.SkipHashes) { $flags += 'SkipHashes' }
+    if ($Config.GenerateLogsAlways) { $flags += 'GenerateLogsAlways' }
+
     if ($flags.Count -gt 0) {
         Write-BuildInfoLine -Label 'Active Flags' -Value ($flags -join ', ') -ValueColor 'DarkYellow'
     }

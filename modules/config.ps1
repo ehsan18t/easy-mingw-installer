@@ -23,10 +23,12 @@
     - TOOL AUTO-DETECTION: 7-Zip and Inno Setup paths are automatically
       discovered from common Program Files locations.
     
-    - MODE FLAGS: Various flags control build behavior:
-      * IsTestMode - Uses mock data instead of real downloads
-      * OfflineMode - Skips all network requests
-      * SkipDownload, SkipBuild, SkipChangelog, SkipHashes - Granular control
+    - MODE FLAGS: Two flags control how the build sources its payload:
+      * SkipDownload - Use generated fixtures instead of downloading; everything
+                       else, including the changelog, runs normally
+      * OfflineMode  - No network requests at all; implies SkipDownload and
+                       SkipChangelog
+      Plus SkipBuild, SkipChangelog, SkipHashes for granular step control.
     
     USAGE:
     
@@ -51,7 +53,7 @@
 .EXAMPLE
     # Basic usage in a script
     . "$PSScriptRoot\modules\config.ps1"
-    Initialize-BuildConfig -Overrides @{ IsTestMode = $true }
+    Initialize-BuildConfig -Overrides @{ SkipDownload = $true }
     $cfg = Get-BuildConfig
     Write-Host "Using 7-Zip at: $($cfg.SevenZipPath)"
 
@@ -269,10 +271,7 @@ function Get-BuildConfig {
         
         RUNTIME STATE (set via Initialize-BuildConfig):
         - IsGitHubActions    : True if running in GitHub Actions
-        - IsTestMode         : True if using mock data
-        - ValidateAssets     : Validate real assets in test mode
-        - GenerateChangelog  : Generate real changelog in test mode
-        - OfflineMode        : Skip all network requests
+        - OfflineMode        : No network requests at all
         - CleanFirst         : Clean temp before starting
         - SkipDownload       : Skip download phase
         - SkipBuild          : Skip Inno Setup compilation
@@ -285,8 +284,8 @@ function Get-BuildConfig {
     
     .EXAMPLE
         $cfg = Get-BuildConfig
-        if ($cfg.IsTestMode) {
-            Write-Host "Running in test mode"
+        if ($cfg.OfflineMode) {
+            Write-Host "Running with no network access"
         }
     #>
     [CmdletBinding()]
@@ -318,11 +317,6 @@ function Get-BuildConfig {
         # ========================
         InstallerName     = 'EasyMinGW Installer'
         InstallerBaseName = 'EasyMinGW.Installer'
-
-        # ========================
-        # Test Mode Settings
-        # ========================
-        TestModeVersion   = '2099.01.01'
 
         # ========================
         # Tool Paths
@@ -368,9 +362,6 @@ function Get-BuildConfig {
         # ========================
         # These are set during initialization based on parameters/environment
         IsGitHubActions   = $env:GITHUB_ACTIONS -eq 'true'
-        IsTestMode        = $false
-        ValidateAssets    = $false
-        GenerateChangelog = $false
         OfflineMode       = $false
         CleanFirst        = $false
         SkipDownload      = $false
@@ -401,25 +392,20 @@ function Initialize-BuildConfig {
            - Auto-detection from Program Files
         
         2. MODE FLAG CONFIGURATION
-           Sets runtime flags based on overrides:
-           - IsTestMode implies SkipDownload and SkipChangelog
            - OfflineMode implies SkipDownload and SkipChangelog
-           - GenerateChangelog overrides SkipChangelog
-        
+           - SkipDownload on its own implies nothing else, so the changelog runs
+
         3. SKIP FLAG PROCESSING
-           Allows granular control over build steps via:
+           Explicit skip flags override the implications above:
            - SkipDownload, SkipBuild, SkipChangelog, SkipHashes
     
     .PARAMETER Overrides
         Hashtable of property overrides. Supported keys:
         - SevenZipPath      : Custom 7-Zip path
         - InnoSetupPath     : Custom Inno Setup path
-        - IsTestMode        : Enable test mode
         - OfflineMode       : Enable offline mode
         - CleanFirst        : Clean temp directory first
-        - ValidateAssets    : Validate assets in test mode
-        - GenerateChangelog : Generate changelog in test mode
-        - SkipDownload      : Skip download phase
+        - SkipDownload      : Use fixtures instead of downloading
         - SkipBuild         : Skip build phase
         - SkipChangelog     : Skip changelog generation
         - SkipHashes        : Skip hash generation
@@ -428,8 +414,8 @@ function Initialize-BuildConfig {
     
     .EXAMPLE
         Initialize-BuildConfig -Overrides @{
-            IsTestMode = $true
-            ValidateAssets = $true
+            SkipDownload = $true
+            CleanFirst   = $true
         }
     
     .EXAMPLE
@@ -473,55 +459,25 @@ function Initialize-BuildConfig {
     # ========================
     # Mode Flags
     # ========================
-    if ($Overrides.ContainsKey('IsTestMode')) {
-        $cfg.IsTestMode = [bool]$Overrides.IsTestMode
-    }
-    if ($Overrides.ContainsKey('OfflineMode')) {
-        $cfg.OfflineMode = [bool]$Overrides.OfflineMode
-    }
-    if ($Overrides.ContainsKey('CleanFirst')) {
-        $cfg.CleanFirst = [bool]$Overrides.CleanFirst
-    }
-    if ($Overrides.ContainsKey('ValidateAssets')) {
-        $cfg.ValidateAssets = [bool]$Overrides.ValidateAssets
-    }
-    if ($Overrides.ContainsKey('GenerateChangelog')) {
-        $cfg.GenerateChangelog = [bool]$Overrides.GenerateChangelog
+    # Override keys match config property names, so one loop covers all of them.
+    foreach ($key in @('OfflineMode', 'CleanFirst')) {
+        if ($Overrides.ContainsKey($key)) {
+            $cfg.$key = [bool]$Overrides[$key]
+        }
     }
 
-    # Test mode implies skip download and changelog (but NOT build)
-    if ($cfg.IsTestMode) {
-        $cfg.SkipDownload = $true
-        $cfg.SkipChangelog = $true
-    }
-
-    # Offline mode implies skip download and changelog (handled in Builder.ps1, but also enforce here)
+    # Offline mode implies both: no download, and no changelog (which needs the API).
+    # -SkipDownload on its own implies neither, so the changelog still runs.
     if ($cfg.OfflineMode) {
         $cfg.SkipDownload = $true
         $cfg.SkipChangelog = $true
     }
 
-    # Allow explicit overrides of skip flags
-    if ($Overrides.ContainsKey('SkipDownload')) {
-        $cfg.SkipDownload = [bool]$Overrides.SkipDownload
-    }
-    if ($Overrides.ContainsKey('SkipBuild')) {
-        $cfg.SkipBuild = [bool]$Overrides.SkipBuild
-    }
-    if ($Overrides.ContainsKey('SkipChangelog')) {
-        $cfg.SkipChangelog = [bool]$Overrides.SkipChangelog
-    }
-    if ($Overrides.ContainsKey('SkipHashes')) {
-        $cfg.SkipHashes = [bool]$Overrides.SkipHashes
-    }
-    
-    # GenerateChangelog overrides SkipChangelog (must come after SkipChangelog handling)
-    if ($cfg.GenerateChangelog) {
-        $cfg.SkipChangelog = $false
-    }
-    
-    if ($Overrides.ContainsKey('GenerateLogsAlways')) {
-        $cfg.GenerateLogsAlways = [bool]$Overrides.GenerateLogsAlways
+    # Explicit skip flags win over the implication above.
+    foreach ($key in @('SkipDownload', 'SkipBuild', 'SkipChangelog', 'SkipHashes', 'GenerateLogsAlways')) {
+        if ($Overrides.ContainsKey($key)) {
+            $cfg.$key = [bool]$Overrides[$key]
+        }
     }
 
     # Log level override

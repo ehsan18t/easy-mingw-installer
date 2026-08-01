@@ -25,8 +25,7 @@
     Includes caching to avoid duplicate requests.
     
     - Invoke-GitHubApi         : Makes cached API requests with error handling
-    - Get-LatestGitHubTag      : Gets the most recent tag from a repository
-    - Get-GitHubTags           : Gets multiple tags for changelog comparison
+    - Get-GitHubTags           : Gets the N most recent tags, newest first
     - Find-GitHubRelease       : Finds a release matching a title pattern
     
     ═══════════════════════════════════════════════════════════════════════════════
@@ -378,82 +377,25 @@ function Invoke-GitHubApi {
     return $null
 }
 
-function Get-LatestGitHubTag {
-    <#
-    .SYNOPSIS
-        Gets the most recent tag from a GitHub repository.
-    
-    .DESCRIPTION
-        Fetches the tags list from a GitHub repository and returns the
-        name of the most recent tag. This is used to:
-        
-        1. Get the current project version for -CheckNewRelease comparison
-        2. Determine the previous version for changelog generation
-        
-        BEHAVIOR:
-        - Calls the GitHub API: /repos/{owner}/{repo}/tags
-        - Returns the first tag in the list (most recent by default)
-        - Uses API caching from Invoke-GitHubApi
-        - Returns $null if no tags exist or API fails
-    
-    .PARAMETER Owner
-        The GitHub username or organization that owns the repository.
-        Example: 'ehsan18t'
-    
-    .PARAMETER Repo
-        The repository name.
-        Example: 'easy-mingw-installer'
-    
-    .OUTPUTS
-        [string] The tag name (e.g., '2024.01.15').
-        [null] If no tags found or API error.
-    
-    .EXAMPLE
-        # Check if we need to build
-        $currentTag = Get-LatestGitHubTag -Owner 'ehsan18t' -Repo 'easy-mingw-installer'
-        if ($currentTag -eq $newVersion) {
-            Write-Host "Already up to date"
-        }
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Owner,
-
-        [Parameter(Mandatory)]
-        [string]$Repo
-    )
-
-    $cfg = Get-BuildConfig
-    $uri = "$($cfg.GitHubApiBase)/repos/$Owner/$Repo/tags"
-    $tags = Invoke-GitHubApi $uri
-
-    if ($tags -and $tags.Count -gt 0) {
-        $latestTag = $tags[0].name
-        Write-VerboseLog "Latest tag for $Owner/$Repo : $latestTag"
-        return $latestTag
-    }
-
-    return $null
-}
-
 function Get-GitHubTags {
     <#
     .SYNOPSIS
-        Gets multiple recent tags from a GitHub repository.
-    
+        Gets the most recent tags from a GitHub repository, newest first.
+
     .DESCRIPTION
-        Fetches the tags list from a GitHub repository and returns
-        the specified number of most recent tags. Primarily used for
-        changelog generation where we need both current and previous tags.
-        
-        USE CASE:
-        When generating a changelog in test mode with -GenerateChangelog,
-        we need to know:
-        - Current tag: The version we're "building"
-        - Previous tag: The last released version for comparison
-        
-        This function returns both in a single API call.
+        The single tag-lookup entry point.
+
+        Builder.ps1 needs the newest tag as the changelog diff baseline and, under
+        -CheckNewRelease, to decide whether a build is needed at all. -Count is kept
+        because comparing two published releases is a natural extension.
+
+        Results come from /repos/{owner}/{repo}/tags via Invoke-GitHubApi, so the
+        response is cached for the run.
+
+        CAVEAT: GitHub does not document that endpoint as date-sorted. It works for
+        this project because the tags are yyyy.MM.dd and sort lexicographically in
+        chronological order. If the tag scheme ever changes, switch to
+        /releases/latest.
     
     .PARAMETER Owner
         The GitHub username or organization that owns the repository.
@@ -467,9 +409,16 @@ function Get-GitHubTags {
         Number of tags to return. Default is 2 (current + previous).
     
     .OUTPUTS
-        [string[]] Array of tag names, newest first.
+        [string[]] Tag names, newest first. ALWAYS an array, including for -Count 1
+        and for the no-tags case. Callers index into it, so a bare string would be
+        indexed by character.
         Example: @('2024.01.15', '2024.01.01')
-    
+
+    .EXAMPLE
+        # Newest tag only
+        $tags = @(Get-GitHubTags -Owner 'ehsan18t' -Repo 'easy-mingw-installer' -Count 1)
+        $latest = if ($tags.Count -gt 0) { $tags[0] } else { $null }
+
     .EXAMPLE
         # Get current and previous tags for changelog
         $tags = Get-GitHubTags -Owner 'ehsan18t' -Repo 'easy-mingw-installer' -Count 2
@@ -495,10 +444,14 @@ function Get-GitHubTags {
     if ($tags -and $tags.Count -gt 0) {
         $result = $tags | Select-Object -First $Count | ForEach-Object { $_.name }
         Write-VerboseLog "Tags for $Owner/$Repo : $($result -join ', ')"
-        return $result
+        # The leading comma is required. PowerShell unwraps a single-element array on
+        # output, so a plain 'return $result' with -Count 1 returns a bare [string]
+        # and the caller's $tags[0] yields '2' from '2025.06.09'. The comma operator
+        # wraps it once more; the outer wrapper is what gets unwrapped.
+        return ,@($result)
     }
 
-    return @()
+    return ,@()
 }
 
 function Find-GitHubRelease {
@@ -902,7 +855,7 @@ function New-TestFixtures {
         USE CASES:
         1. Testing the build pipeline without network access
         2. Rapid iteration during development
-        3. CI/CD pipeline testing with -TestMode flag
+        3. CI/CD pipeline testing with the -SkipDownload flag
         4. Validating Inno Setup script changes
     
     .PARAMETER Path
@@ -1153,10 +1106,10 @@ function Invoke-ChangelogGeneration {
         5. File Hash section header (hashes appended later)
         
         DATA SOURCES:
-        The function can obtain current package info from:
-        1. Local version_info.txt (normal build mode)
-        2. GitHub release tag (test mode with -GenerateChangelog)
-        
+        Current package info always comes from the local version_info.txt, which is
+        either extracted from the downloaded archive or generated by New-TestFixtures
+        in the fixture modes.
+
         Previous package info is always fetched from the previous GitHub
         release tag to enable version comparison.
         
@@ -1166,12 +1119,15 @@ function Invoke-ChangelogGeneration {
         --github-owner      : Repository owner (from config)
         --github-repo       : Repository name (from config)
         --prev-tag          : Previous release tag for comparison
-        --input-file        : Local version_info.txt path (OR)
-        --current-tag       : GitHub tag to fetch current info from
-    
+        --input-file        : Local version_info.txt path
+
+        The Python script also accepts --current-tag, which reads the current package
+        list from a published release instead of a local file. Nothing in the build
+        uses it; it stays there for manually diffing two published releases by hand.
+
     .PARAMETER VersionInfoPath
-        Path to the local version_info.txt file extracted from MinGW archive.
-        Required unless CurrentTag is provided.
+        Path to the local version_info.txt file extracted from MinGW archive, or
+        generated by New-TestFixtures in the fixture modes.
     
     .PARAMETER OutputPath
         Path where the changelog markdown file will be written.
@@ -1186,14 +1142,11 @@ function Invoke-ChangelogGeneration {
         Used to generate diff and comparison link.
         Example: '2024.01.01'
     
-    .PARAMETER CurrentTag
-        If provided, fetches current package info from this GitHub release
-        instead of using the local version_info.txt file.
-        Used in test mode with -GenerateChangelog flag.
-    
     .OUTPUTS
         [bool] $true if changelog was generated successfully, $false otherwise.
-    
+        The caller must not discard this: a $false that is ignored yields a build
+        that reports success with no release notes for the workflow to publish.
+
     .EXAMPLE
         # Generate changelog from local file
         Invoke-ChangelogGeneration `
@@ -1201,18 +1154,12 @@ function Invoke-ChangelogGeneration {
             -OutputPath './release_notes.md' `
             -Version '2024.01.15' `
             -PreviousTag '2024.01.01'
-    
-    .EXAMPLE
-        # Generate changelog from GitHub (test mode)
-        Invoke-ChangelogGeneration `
-            -OutputPath './release_notes.md' `
-            -Version '2024.01.15' `
-            -PreviousTag '2024.01.01' `
-            -CurrentTag '2024.01.15'
-    
+
     .NOTES
-        Requires Python 3.8+ with the 'requests' package installed.
-        Falls back to New-FallbackChangelog if Python is unavailable.
+        Requires Python 3.8+ with the 'requests' package installed. The interpreter
+        is resolved by Find-Python, so either 'python' or the 'py' launcher works.
+        If neither is available the function returns $false and the build fails;
+        there is no fallback path.
     #>
     [CmdletBinding()]
     param(
@@ -1226,10 +1173,7 @@ function Invoke-ChangelogGeneration {
         [string]$Version,
 
         [Parameter()]
-        [string]$PreviousTag,
-
-        [Parameter()]
-        [string]$CurrentTag
+        [string]$PreviousTag
     )
 
     # Skip if already exists
@@ -1238,8 +1182,7 @@ function Invoke-ChangelogGeneration {
         return $true
     }
 
-    # Require version info or CurrentTag
-    if (-not $CurrentTag -and -not (Test-Path $VersionInfoPath)) {
+    if (-not (Test-Path $VersionInfoPath)) {
         Write-ErrorMessage -ErrorType 'Changelog' -Message "Version info file not found: $VersionInfoPath"
         return $false
     }
@@ -1273,14 +1216,7 @@ function Invoke-ChangelogGeneration {
         $pyArgs += '--prev-tag', $PreviousTag
     }
 
-    # Use CurrentTag to fetch from GitHub, otherwise use local file
-    if ($CurrentTag) {
-        $pyArgs += '--current-tag', $CurrentTag
-        Write-VerboseLog "Fetching current package info from GitHub tag: $CurrentTag"
-    }
-    else {
-        $pyArgs += '--input-file', $VersionInfoPath
-    }
+    $pyArgs += '--input-file', $VersionInfoPath
 
     # Start Python process with tracking for cancellation
     $processInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -1688,10 +1624,6 @@ function Invoke-ArchitectureBuild {
     .PARAMETER PreviousTag
         The previous release tag for changelog comparison. Optional.
     
-    .PARAMETER CurrentTag
-        If provided, fetches current package info from this GitHub release
-        instead of local version_info.txt. Used in test mode with GenerateChangelog.
-    
     .PARAMETER OutputDirectory
         Directory where the built installer and hash files will be placed.
     
@@ -1739,9 +1671,6 @@ function Invoke-ArchitectureBuild {
         [Parameter()]
         [string]$PreviousTag,
 
-        [Parameter()]
-        [string]$CurrentTag,
-
         [Parameter(Mandatory)]
         [string]$OutputDirectory,
 
@@ -1762,27 +1691,24 @@ function Invoke-ArchitectureBuild {
 
     # Find matching asset
     $asset = $null
-    if ($cfg.IsTestMode -and -not $cfg.ValidateAssets) {
-        # Pure test mode: use mock asset
+    if ($cfg.OfflineMode) {
+        # No release was fetched, so there is nothing to match against.
         $asset = @{
-            name                  = "mingw-test-$Architecture.7z"
-            browser_download_url  = 'test://fake.7z'
+            name                 = "mingw-offline-$Architecture.7z"
+            browser_download_url = 'offline://none'
         }
-        Write-StatusInfo -Type 'Asset' -Message "$($asset.name) (test mode)"
+        Write-StatusInfo -Type 'Asset' -Message "$($asset.name) (offline mode)"
     }
     else {
-        # Find real asset from release
+        # Runs for -SkipDownload too: resolving the asset proves the release actually
+        # contains a matching file, which is the check the old -ValidateAssets flag
+        # existed to perform. It now happens on every networked build.
         $asset = $Release.assets | Where-Object { $_.name -match $AssetPattern } | Select-Object -First 1
         if (-not $asset) {
             Write-ErrorMessage -ErrorType 'Asset Not Found' -Message "No match for pattern: $AssetPattern"
             return $false
         }
         Write-StatusInfo -Type 'Asset' -Message $asset.name
-        
-        # If in test mode with ValidateAssets, just validate and continue with test fixtures
-        if ($cfg.IsTestMode -and $cfg.ValidateAssets) {
-            Write-SuccessMessage -Type 'Validated' -Message "Asset exists: $($asset.name)"
-        }
     }
 
     # Set up working directories
@@ -1800,8 +1726,8 @@ function Invoke-ArchitectureBuild {
         # ========================
         # Download/Extract or Test Fixtures
         # ========================
-        if ($cfg.IsTestMode -or $cfg.SkipDownload) {
-            # Test mode: create fixtures
+        if ($cfg.SkipDownload) {
+            # Fixture modes (-SkipDownload, and -OfflineMode which implies it)
             New-TestFixtures -Path $sourcePath -Architecture $Architecture -Date $Date
 
             $versionInfo = Join-Path $sourcePath 'version_info.txt'
@@ -1842,19 +1768,12 @@ function Invoke-ArchitectureBuild {
         # ========================
         if (-not $cfg.SkipChangelog) {
             $changelogParams = @{
-                OutputPath  = $ReleaseNotesPath
-                Version     = $Version
-                PreviousTag = $PreviousTag
+                OutputPath      = $ReleaseNotesPath
+                Version         = $Version
+                PreviousTag     = $PreviousTag
+                VersionInfoPath = $buildInfoPath
             }
-            
-            # In test mode with GenerateChangelog, fetch from GitHub instead of local file
-            if ($CurrentTag) {
-                $changelogParams['CurrentTag'] = $CurrentTag
-            }
-            else {
-                $changelogParams['VersionInfoPath'] = $buildInfoPath
-            }
-            
+
             # Do not discard the result. A failed changelog previously left the build
             # reporting success with no release_notes_body.md, which the release
             # workflow then publishes as an empty release body. Use -SkipChangelog to
@@ -1882,8 +1801,8 @@ function Invoke-ArchitectureBuild {
         return $true
     }
     finally {
-        # Cleanup temp directory (skip in test mode for inspection)
-        if (-not $cfg.IsTestMode -and (Test-Path $archTempDir)) {
+        # Fixture-based runs keep the temp directory so the generated tree can be inspected.
+        if (-not $cfg.SkipDownload -and (Test-Path $archTempDir)) {
             Write-VerboseLog "Cleaning up: $archTempDir"
             Remove-Item $archTempDir -Recurse -Force -ErrorAction SilentlyContinue
         }

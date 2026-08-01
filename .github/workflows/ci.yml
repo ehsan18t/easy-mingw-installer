@@ -17,7 +17,7 @@ on:
 jobs:
   test-build:
     runs-on: windows-2025
-    name: Test Build (GCC 15)
+    name: Test Build (GCC 16)
 
     steps:
       - name: Check out repository
@@ -37,18 +37,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Define build parameters
+          # -SkipDownload does what TestMode + ValidateAssets + GenerateChangelog
+          # used to: real release lookup, real asset validation, real changelog,
+          # fixture payload. Only the 200MB transfer is skipped.
           $params = @{
-            TitlePattern      = '*CC 15*POSIX*MinGW*UCRT*'
-            Archs             = @('64', '32')
-            NamePatterns      = @(
+            TitlePattern = '*CC 16*POSIX*MinGW*UCRT*'
+            Archs        = @('64', '32')
+            NamePatterns = @(
               'winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$',
               'winlibs-i686-posix-dwarf-gcc-[0-9.]+-mingw-w64ucrt-(.*?).7z$'
             )
-            OutputPath        = './builds'
-            TestMode          = $true
-            ValidateAssets    = $true
-            GenerateChangelog = $true
-            CleanFirst        = $true
+            OutputPath         = './builds'
+            SkipDownload       = $true
+            CleanFirst         = $true
             GenerateLogsAlways = $true
           }
 
