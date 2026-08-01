@@ -385,6 +385,73 @@ function Write-UpdatingLine {
     }
 }
 
+function Write-UpdatingStatus {
+    <#
+    .SYNOPSIS
+        Rewrites a styled status line in place (" [>] Type: Message").
+
+    .DESCRIPTION
+        Write-UpdatingLine's styled sibling. Same carriage-return redraw, but the
+        indicator, label and message are coloured from $script:LogStyles exactly
+        as Write-StatusInfo would, so a live-updating line is indistinguishable
+        from a normal one once it stops moving.
+
+        That is what lets a progress readout BE the status line instead of
+        sitting under a static one that repeats what the caller already printed.
+
+        Call End-UpdatingLine when finished, or the next write lands on this line.
+
+        Under GitHub Actions there is no carriage-return support, so the line is
+        written normally; callers should throttle or skip progress updates there
+        or the log fills with near-identical lines.
+
+    .PARAMETER Type
+        Short label before the colon, for example 'Downloading'.
+
+    .PARAMETER Message
+        The message body, typically a changing value.
+
+    .PARAMETER Level
+        Style row to use. Defaults to Status.
+
+    .PARAMETER LineClearLength
+        Total width to pad to, so a shorter message fully overwrites a longer
+        previous one. Padding is applied to the message segment only.
+
+    .EXAMPLE
+        Write-UpdatingStatus -Type 'Downloading' -Message '512KB / 108000KB (0%)'
+        Write-UpdatingStatus -Type 'Downloading' -Message '108000KB / 108000KB (100%)'
+        End-UpdatingLine
+        # One line that counts up, ending as: [>] Downloading: 108000KB / 108000KB (100%)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('Log', 'Status', 'Success', 'Warning', 'Error')]
+        [string]$Level = 'Status',
+        [int]$LineClearLength = 78
+    )
+
+    $style = $script:LogStyles[$Level]
+
+    if ($script:IsGitHubActions) {
+        Write-Host " $($style.Indicator) $($Type): $Message" -ForegroundColor $style.MessageColor
+        return
+    }
+
+    # Pad the message so a shorter readout overwrites a longer previous one. The
+    # prefix is a fixed width, so only the tail needs padding.
+    $prefixLength = 5 + $Type.Length + 2   # ' ' + '[>]' + ' ' + Type + ': '
+    $pad = $LineClearLength - $prefixLength
+    if ($pad -lt 0) { $pad = 0 }
+
+    Write-Host -Object "`r" -NoNewline
+    Write-ColoredHost -Text " $($style.Indicator) " -ForegroundColor $style.IndicatorColor -NoNewline
+    Write-ColoredHost -Text "$($Type): " -ForegroundColor $style.TypeColor -NoNewline
+    Write-ColoredHost -Text $Message.PadRight($pad) -ForegroundColor $style.MessageColor -NoNewline
+}
+
 function End-UpdatingLine {
     [CmdletBinding()]
     param()

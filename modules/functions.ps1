@@ -637,11 +637,20 @@ function Invoke-FileDownload {
         - Configurable timeouts and buffer sizes via config
         
         PROGRESS DISPLAY:
-        In local terminal mode, shows updating progress line:
-          Progress (Attempt 1): 15360KB / 150000KB (10%)
-        
-        In GitHub Actions, uses simple Invoke-WebRequest without progress
-        to avoid log pollution.
+        In local terminal mode the progress readout IS the Downloading line,
+        redrawn in place:
+          [>] Downloading: 15360KB / 150000KB (10%)
+
+        The caller prints "Asset: <name>" directly above, so the filename is not
+        repeated here. The attempt number is appended only from the second
+        attempt on, and the total is omitted when the server sends no
+        Content-Length:
+          [>] Downloading: 15360KB / 150000KB (10%) - attempt 2
+          [>] Downloading: 15360KB
+
+        In GitHub Actions, uses simple Invoke-WebRequest without progress to
+        avoid log pollution, and the filename is printed once as a static line
+        since there is no carriage-return redraw there.
         
         RETRY BEHAVIOR:
         1. Attempts download up to DownloadRetries times (default: 3)
@@ -692,7 +701,14 @@ function Invoke-FileDownload {
 
     $cfg = Get-BuildConfig
     $fileName = Split-Path $Url -Leaf
-    Write-StatusInfo -Type 'Downloading' -Message $fileName
+
+    # The caller already printed "Asset: <name>" immediately above, so naming the
+    # file again here only to print progress underneath said the same thing twice.
+    # The progress readout is now the Downloading line itself. GitHub Actions has
+    # no carriage-return redraw, so there it stays a single static line.
+    if ($cfg.IsGitHubActions) {
+        Write-StatusInfo -Type 'Downloading' -Message $fileName
+    }
 
     # Ensure destination directory exists
     $destDir = Split-Path $Destination -Parent
@@ -735,10 +751,34 @@ function Invoke-FileDownload {
                         $now = [DateTime]::Now
                         if (($now - $lastProgressUpdate).TotalMilliseconds -ge 100) {
                             $downloadedKB = [math]::Round($downloadedBytes / 1KB, 0)
-                            $percentage = if ($totalLength -gt 0) { [math]::Round(($downloadedBytes / $totalLength) * 100, 0) } else { 0 }
-                            Write-UpdatingLine -Text "  Progress (Attempt $attempt): ${downloadedKB}KB / ${totalLengthKB}KB ($percentage%)"
+
+                            # A server that sends no Content-Length gives -1, which
+                            # would render as "/ 0KB (0%)" for the whole transfer.
+                            if ($totalLength -gt 0) {
+                                $percentage = [math]::Round(($downloadedBytes / $totalLength) * 100, 0)
+                                $progress = "${downloadedKB}KB / ${totalLengthKB}KB ($percentage%)"
+                            }
+                            else {
+                                $progress = "${downloadedKB}KB"
+                            }
+
+                            # Attempt number only means something once one has failed.
+                            if ($attempt -gt 1) { $progress = "$progress - attempt $attempt" }
+
+                            Write-UpdatingStatus -Type 'Downloading' -Message $progress
                             $lastProgressUpdate = $now
                         }
+                    }
+
+                    # Final frame. The last chunk almost always arrives inside the
+                    # 100ms throttle window, so without this the line is left
+                    # reading 99% directly above a "Downloaded" success message.
+                    $downloadedKB = [math]::Round($downloadedBytes / 1KB, 0)
+                    if ($totalLength -gt 0) {
+                        Write-UpdatingStatus -Type 'Downloading' -Message "${downloadedKB}KB / ${totalLengthKB}KB (100%)"
+                    }
+                    else {
+                        Write-UpdatingStatus -Type 'Downloading' -Message "${downloadedKB}KB"
                     }
                 }
                 finally {
