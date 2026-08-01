@@ -1,5 +1,10 @@
+; Registry location of the machine-wide environment block. Defined once here and
+; consumed by both the [Registry] entry and the Pascal code in
+; MinGW_Installer.iss, so the copies of this path cannot drift apart.
+#define EnvironmentKeyPath "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+
 [Code]
-const EnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
+const EnvironmentKey = '{#EnvironmentKeyPath}';
 
 procedure EnvRemovePath(Path: string);
 var
@@ -32,7 +37,32 @@ begin
 
     if not Changed then exit;
 
-    { Write updated path environment variable }
+    { Removing an entry that sits last leaves a dangling separator. Delete clamps
+      to the string length, so 'C:\Windows;C:\MinGW64\bin' comes back as
+      'C:\Windows;'. Windows ignores the empty field, but there is no reason to
+      write it. Tested against the real engine, so the shape matters: this is a
+      loop with an explicit Break rather than
+      "while (Length(Paths) > 0) and (Paths[Length(Paths)] = ';')", because
+      Pascal Script does not guarantee short-circuit evaluation and the second
+      operand would index Paths[0] once the string was empty. }
+    while Paths <> '' do
+    begin
+        if Paths[Length(Paths)] <> ';' then Break;
+        Delete(Paths, Length(Paths), 1);
+    end;
+
+    { Never blank out the machine PATH. If this entry were somehow the only one
+      present, everything above reduces Paths to '' and the write below would
+      strip every directory from the system PATH for every user. }
+    if Paths = '' then
+    begin
+        Log(Format('Refusing to write an empty system PATH while removing [%s]', [Path]));
+        exit;
+    end;
+
+    { Write updated path environment variable. RegWriteStringValue preserves an
+      existing REG_EXPAND_SZ value's type, so the %SystemRoot% style entries in
+      PATH keep expanding. }
     if RegWriteStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths)
     then Log(Format('Removed [%s] from PATH', [Path]))
     else Log(Format('Error removing [%s] from PATH', [Path]));

@@ -63,7 +63,7 @@ Source: "assets\icon{#Arch}.ico"; DestDir: "{sd}\MinGW{#Arch}";
 
 [Registry]
 ; Add MinGW bin directory to system PATH (automatically removed on uninstall)
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; \
+Root: HKLM; Subkey: "{#EnvironmentKeyPath}"; \
   ValueType: expandsz; ValueName: "Path"; ValueData: "{sd}\MinGW{#Arch}\bin;{olddata}"; \
   Check: NeedsAddPath(ExpandConstant('{sd}\MinGW{#Arch}\bin'))
 
@@ -87,8 +87,10 @@ function NeedsAddPath(Path: string): Boolean;
 var
   Paths: string;
 begin
-  { Returns True if the path is not already in PATH }
-  if not RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths) then
+  { Returns True if the path is not already in PATH. EnvironmentKey comes from
+    the included Environment.iss, so this and EnvRemovePath cannot end up
+    reading and writing different registry keys. }
+  if not RegQueryStringValue(HKLM, EnvironmentKey, 'Path', Paths) then
     Result := True
   else
     Result := Pos(Uppercase(Path) + ';', Uppercase(Paths + ';')) = 0;
