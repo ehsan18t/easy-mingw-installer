@@ -43,6 +43,12 @@ VersionInfoDescription={#MyAppName} {#Arch}-bit Setup
 ; Programs entry said which one. Without this it falls back to AppVerName.
 UninstallDisplayName={#MyAppName} ({#Arch}-bit)
 CreateAppDir=no
+; With CreateAppDir=no, {app} is {win} and Inno puts the uninstall data in the
+; Windows directory -- about 12 MB of unins000.exe/.dat in C:\Windows. Keep it
+; with the toolchain it describes instead. PrepareToInstall wipes this directory
+; on upgrade, which deletes the old uninstaller too; Inno recreates it during
+; the install step, verified end to end.
+UninstallFilesDir={sd}\MinGW{#Arch}
 PrivilegesRequired=admin
 OutputDir={#OutputPath}
 OutputBaseFilename="{#MyOutputName}.v{#MyAppVersion}.{#Arch}-bit"
