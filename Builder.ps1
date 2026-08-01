@@ -483,12 +483,11 @@ catch [System.Management.Automation.PipelineStoppedException] {
     exit 1
 }
 catch {
+    # Write-ErrorMessage emits the ::error:: annotation itself under GitHub Actions,
+    # so the run summary gets the message. The full exception with its stack trace
+    # goes to the log body only: an annotation is meant to be one line.
     Write-ErrorMessage -ErrorType 'FATAL' -Message "Unhandled error: $($_.Exception.Message)"
-    
-    if ($cfg.IsGitHubActions) {
-        Write-GitHubActionsError -Message $_.Exception.ToString()
-    }
-    
+    Write-LogEntry -Type 'Exception' -Message $_.Exception.ToString()
     $buildSuccess = $false
 }
 finally {

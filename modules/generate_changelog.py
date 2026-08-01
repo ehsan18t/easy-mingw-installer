@@ -44,12 +44,13 @@ ENV_GITHUB_TOKEN = "GITHUB_TOKEN"
 # Logging Functions
 # =============================================================================
 
-# Log level prefixes matching PowerShell output style
+# Log level prefixes matching PowerShell output style (see modules/pretty.ps1,
+# $script:LogStyles). Keep these in sync: build logs interleave both scripts.
 _LOG_PREFIXES = {
-    "info": " >> ",
-    "success": " ++ ",
-    "warning": " !! ",
-    "error": " ** ",
+    "info": " [>] ",
+    "success": " [+] ",
+    "warning": " [!] ",
+    "error": " [X] ",
 }
 
 

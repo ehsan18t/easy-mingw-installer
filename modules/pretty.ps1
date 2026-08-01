@@ -13,15 +13,23 @@
     
     All output follows a consistent format: INDICATOR TYPE: MESSAGE
     
-    ┌──────────────┬────────────┬─────────────────────────────────────────────────┐
-    │  Indicator   │  Function  │  Purpose                                        │
-    ├──────────────┼────────────┼─────────────────────────────────────────────────┤
-    │  ->          │ LogEntry   │ General log messages (blue indicator)           │
-    │  >>          │ StatusInfo │ Status/progress updates (magenta indicator)     │
-    │  ++          │ Success    │ Successful operations (green indicator)         │
-    │  !!          │ Warning    │ Warnings and cautions (red indicator)           │
-    │  **          │ Error      │ Error messages (dark red indicator)             │
-    └──────────────┴────────────┴─────────────────────────────────────────────────┘
+    ┌──────────────┬────────────┬──────────────────────────────┬─────────────────┐
+    │  Indicator   │  Function  │  Purpose                     │  CI annotation  │
+    ├──────────────┼────────────┼──────────────────────────────┼─────────────────┤
+    │  [-]         │ LogEntry   │ General log messages         │  none           │
+    │  [>]         │ StatusInfo │ Status/progress updates      │  none           │
+    │  [+]         │ Success    │ Successful operations        │  none           │
+    │  [!]         │ Warning    │ Warnings and cautions        │  ::warning::    │
+    │  [X]         │ Error      │ Error messages               │  ::error::      │
+    └──────────────┴────────────┴──────────────────────────────┴─────────────────┘
+
+    Every level has a distinct indicator, so a plain-text log can be filtered by
+    severity without relying on color: `Select-String '\[X\]'` finds errors only.
+    modules/generate_changelog.py uses the same set, so Python and PowerShell output
+    are indistinguishable in a combined log.
+
+    Under GitHub Actions, Warning and Error additionally emit a workflow command so
+    they appear in the run summary and PR UI rather than only in the log body.
     
     ═══════════════════════════════════════════════════════════════════════════════
     FUNCTION CATEGORIES
@@ -29,7 +37,7 @@
     
     BASIC OUTPUT:
     - Write-ColoredHost      : Write text with specified foreground color
-    - Write-FormattedLine    : Write indicator + type + message format
+    - Write-Log              : The single primitive all message types route through
     - Write-SeparatorLine    : Write horizontal separator (----)
     
     MESSAGE TYPES:
@@ -43,7 +51,9 @@
     - End-UpdatingLine       : Ends an updating line with newline
     
     GITHUB ACTIONS INTEGRATION:
-    - Write-GitHubActionsError   : Write error annotation
+    Warning and Error levels emit ::warning:: and ::error:: workflow commands
+    automatically when $env:GITHUB_ACTIONS is 'true'. See Write-Log.
+    - ConvertTo-GitHubAnnotationText : Escapes a message for a workflow command
     
     BUILD INFORMATION:
     - Write-BuildHeader      : Display script banner/title
@@ -96,127 +106,258 @@
 # Detect GitHub Actions environment
 $script:IsGitHubActions = $env:GITHUB_ACTIONS -eq 'true'
 
-# Function to print colored output
+# ============================================================================
+# Message Styles
+# ============================================================================
+# One row per message level. Adding a level means adding a row here and a
+# one-line wrapper below, nothing else.
+#
+# Annotation is the GitHub Actions workflow command emitted alongside the console
+# line when running in CI, or $null for levels that should not clutter the run
+# summary. Keeping it in this table is what stops the console severity and the CI
+# severity from drifting apart.
+# ============================================================================
+
+$script:LogStyles = @{
+    Log     = @{ Indicator = '[-]'; IndicatorColor = 'Blue';    TypeColor = 'White';      MessageColor = 'DarkCyan'; Annotation = $null }
+    Status  = @{ Indicator = '[>]'; IndicatorColor = 'Magenta'; TypeColor = 'White';      MessageColor = 'Yellow';   Annotation = $null }
+    Success = @{ Indicator = '[+]'; IndicatorColor = 'Green';   TypeColor = 'White';      MessageColor = 'Green';    Annotation = $null }
+    Warning = @{ Indicator = '[!]'; IndicatorColor = 'Red';     TypeColor = 'DarkYellow'; MessageColor = 'DarkRed';  Annotation = 'warning' }
+    Error   = @{ Indicator = '[X]'; IndicatorColor = 'DarkRed'; TypeColor = 'DarkRed';    MessageColor = 'Red';      Annotation = 'error' }
+}
+
+function ConvertTo-GitHubAnnotationText {
+    <#
+    .SYNOPSIS
+        Escapes a string for use inside a GitHub Actions workflow command.
+    .DESCRIPTION
+        Workflow commands are line-based, so a literal newline ends the annotation
+        early and everything after it is printed as plain log text. A literal percent
+        sign is ambiguous with the escape sequences themselves, so it is escaped
+        first. See "Setting an error message" in the GitHub Actions documentation.
+    .PARAMETER Text
+        The raw message.
+    .OUTPUTS
+        [string] The escaped message.
+    .EXAMPLE
+        ConvertTo-GitHubAnnotationText "Line one<newline>Line two"
+        # Line one%0ALine two
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+    # Percent must be escaped before the others, or their '%' would be double-escaped.
+    return $Text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+}
+
 function Write-ColoredHost {
+    <#
+    .SYNOPSIS
+        Writes text in a given console color.
+    .PARAMETER Text
+        The text to write.
+    .PARAMETER ForegroundColor
+        Console color for the text.
+    .PARAMETER NoNewline
+        Suppress the trailing newline so the next write continues the same line.
+    .EXAMPLE
+        Write-ColoredHost -Text 'Building...' -ForegroundColor 'Cyan'
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [string]$Text,
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [System.ConsoleColor]$ForegroundColor,
         [switch]$NoNewline
     )
-    if ($NoNewline) {
-        Write-Host -Object $Text -ForegroundColor $ForegroundColor -NoNewline
-    } else {
-        Write-Host -Object $Text -ForegroundColor $ForegroundColor
-    }
+    Write-Host -Object $Text -ForegroundColor $ForegroundColor -NoNewline:$NoNewline
 }
 
-function Write-FormattedLine {
+function Write-Log {
+    <#
+    .SYNOPSIS
+        Writes a formatted, colored log line: " <indicator> <Type>: <Message>".
+
+    .DESCRIPTION
+        The single output primitive for the build. Write-LogEntry, Write-StatusInfo,
+        Write-SuccessMessage, Write-WarningMessage and Write-ErrorMessage all route
+        here; those five exist so call sites read naturally and so the level cannot be
+        misspelled at the call site.
+
+        Indicator, colors and CI annotation level all come from $script:LogStyles,
+        keyed by -Level.
+
+        Under GitHub Actions, levels whose style row carries an Annotation value also
+        emit the matching workflow command, so warnings and errors appear in the run
+        summary and PR UI rather than only in the log body. Local runs are unaffected.
+
+    .PARAMETER Level
+        One of: Log, Status, Success, Warning, Error.
+
+    .PARAMETER Type
+        Short label before the colon, for example 'Downloading' or 'FATAL'.
+
+    .PARAMETER Message
+        The message body.
+
+    .EXAMPLE
+        Write-Log -Level Status -Type 'Downloading' -Message 'mingw64.7z'
+        # [>] Downloading: mingw64.7z
+
+    .EXAMPLE
+        Write-Log -Level Error -Type 'FATAL' -Message 'Inno Setup not found'
+        # [X] FATAL: Inno Setup not found
+        # and, in CI, also: ::error::FATAL: Inno Setup not found
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Indicator,
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
+        [ValidateSet('Log', 'Status', 'Success', 'Warning', 'Error')]
+        [string]$Level,
+        [Parameter(Mandatory)]
         [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [Parameter(Mandatory = $true)]
-        [System.ConsoleColor]$IndicatorColor,
-        [Parameter(Mandatory = $true)]
-        [System.ConsoleColor]$TypeColor,
-        [Parameter(Mandatory = $true)]
-        [System.ConsoleColor]$MessageColor
+        [Parameter(Mandatory)]
+        [string]$Message
     )
-    Write-ColoredHost -Text " $Indicator " -ForegroundColor $IndicatorColor -NoNewline
-    Write-ColoredHost -Text "$($Type): " -ForegroundColor $TypeColor -NoNewline
-    Write-ColoredHost -Text $Message -ForegroundColor $MessageColor
+
+    $style = $script:LogStyles[$Level]
+
+    Write-ColoredHost -Text " $($style.Indicator) " -ForegroundColor $style.IndicatorColor -NoNewline
+    Write-ColoredHost -Text "$($Type): " -ForegroundColor $style.TypeColor -NoNewline
+    Write-ColoredHost -Text $Message -ForegroundColor $style.MessageColor
+
+    if ($script:IsGitHubActions -and $style.Annotation) {
+        $annotationText = ConvertTo-GitHubAnnotationText "$($Type): $Message"
+        Write-Host "::$($style.Annotation)::$annotationText"
+    }
 }
 
 function Write-LogEntry {
+    <#
+    .SYNOPSIS
+        Writes a general log line (" [-] Type: Message").
+    .PARAMETER Type
+        Short label before the colon.
+    .PARAMETER Message
+        The message body.
+    .EXAMPLE
+        Write-LogEntry -Type '7-Zip Path' -Message 'C:\Program Files\7-Zip\7z.exe'
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [System.ConsoleColor]$TypeColor = 'White',
-        [System.ConsoleColor]$MessageColor = 'DarkCyan'
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)][string]$Message
     )
-    Write-FormattedLine -Indicator "->" -Type $Type -Message $Message -IndicatorColor 'Blue' -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-Log -Level Log -Type $Type -Message $Message
 }
 
 function Write-StatusInfo {
+    <#
+    .SYNOPSIS
+        Writes a status or progress line (" [>] Type: Message").
+    .PARAMETER Type
+        Short label before the colon.
+    .PARAMETER Message
+        The message body.
+    .EXAMPLE
+        Write-StatusInfo -Type 'Building' -Message 'EasyMinGW Installer v2026.08.01 (64-bit)'
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [System.ConsoleColor]$TypeColor = 'White',
-        [System.ConsoleColor]$MessageColor = 'Yellow'
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)][string]$Message
     )
-    Write-FormattedLine -Indicator ">>" -Type $Type -Message $Message -IndicatorColor 'Magenta' -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-Log -Level Status -Type $Type -Message $Message
 }
 
 function Write-SuccessMessage {
+    <#
+    .SYNOPSIS
+        Writes a success line (" [+] Type: Message").
+    .PARAMETER Type
+        Short label before the colon.
+    .PARAMETER Message
+        The message body.
+    .EXAMPLE
+        Write-SuccessMessage -Type 'Downloaded' -Message 'mingw64.7z (198.40 MB)'
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [System.ConsoleColor]$TypeColor = 'White',
-        [System.ConsoleColor]$MessageColor = 'Green'
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)][string]$Message
     )
-    Write-FormattedLine -Indicator "++" -Type $Type -Message $Message -IndicatorColor 'Green' -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-Log -Level Success -Type $Type -Message $Message
 }
 
 function Write-WarningMessage {
+    <#
+    .SYNOPSIS
+        Writes a warning line (" [!] Type: Message").
+    .DESCRIPTION
+        In GitHub Actions this also emits a ::warning:: annotation, so the message
+        appears in the run summary and, for a pull request, next to the diff.
+    .PARAMETER Type
+        Short label before the colon.
+    .PARAMETER Message
+        The message body.
+    .EXAMPLE
+        Write-WarningMessage -Type 'Changelog' -Message 'No previous tag found for comparison'
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [System.ConsoleColor]$TypeColor = 'DarkYellow',
-        [System.ConsoleColor]$MessageColor = 'DarkRed'
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)][string]$Message
     )
-    Write-FormattedLine -Indicator "!!" -Type $Type -Message $Message -IndicatorColor 'Red' -TypeColor $TypeColor -MessageColor $MessageColor
+    Write-Log -Level Warning -Type $Type -Message $Message
 }
 
-
 function Write-ErrorMessage {
+    <#
+    .SYNOPSIS
+        Writes an error line (" [X] ErrorType: Message").
+    .DESCRIPTION
+        The parameter is named -ErrorType rather than -Type for historical reasons;
+        every call site in the build uses that name.
+
+        In GitHub Actions this also emits an ::error:: annotation, so a failing run
+        shows the reason in its summary instead of only in the log body. This is why
+        the old Write-GitHubActionsError function no longer exists.
+    .PARAMETER ErrorType
+        Short error label, for example 'FATAL' or 'Build Failed'.
+    .PARAMETER Message
+        The error text.
+    .EXAMPLE
+        Write-ErrorMessage -ErrorType 'FATAL' -Message 'Required dependencies are missing.'
+    #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$ErrorType, # e.g., "ERROR", "CRITICAL"
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [string]$LogFilePath,
-        [int]$AssociatedExitCode = 0,
-        [System.ConsoleColor]$TypeColor = 'DarkRed',
-        [System.ConsoleColor]$MessageColor = 'Red'
+        [Parameter(Mandatory)][string]$ErrorType,
+        [Parameter(Mandatory)][string]$Message
     )
-    Write-ColoredHost -Text " !! $($ErrorType): " -ForegroundColor $TypeColor -NoNewline
-    Write-ColoredHost -Text $Message -ForegroundColor $MessageColor
-
-    if ($AssociatedExitCode -ne 0) {
-        Write-ColoredHost -Text "    Associated Exit Code: " -ForegroundColor 'DarkRed' -NoNewline
-        Write-ColoredHost -Text $AssociatedExitCode -ForegroundColor 'Cyan'
-    }
-    if ($LogFilePath) {
-        Write-ColoredHost -Text " >> " -ForegroundColor 'DarkYellow' -NoNewline
-        Write-ColoredHost -Text "Log: " -ForegroundColor 'Yellow' -NoNewline
-        Write-ColoredHost -Text $LogFilePath -ForegroundColor 'Cyan'
-    }
+    Write-Log -Level Error -Type $ErrorType -Message $Message
 }
 
 function Write-SeparatorLine {
+    <#
+    .SYNOPSIS
+        Writes a horizontal rule.
+    .PARAMETER Character
+        Character to repeat. Defaults to '-'.
+    .PARAMETER Length
+        Number of characters. Defaults to 50.
+    .PARAMETER Color
+        Console color. Defaults to DarkGray.
+    .EXAMPLE
+        Write-SeparatorLine -Character '=' -Length 60
+    #>
     [CmdletBinding()]
     param(
-        [string]$Character = "-",
+        [string]$Character = '-',
         [int]$Length = 50,
         [System.ConsoleColor]$Color = 'DarkGray'
     )
@@ -251,43 +392,6 @@ function End-UpdatingLine {
     if (-not $script:IsGitHubActions) {
         Write-Host ''
     }
-}
-
-# ============================================================================
-# GitHub Actions Integration
-# ============================================================================
-
-function Write-GitHubActionsError {
-    <#
-    .SYNOPSIS
-        Writes an error annotation in GitHub Actions.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Message,
-        [string]$File,
-        [int]$Line,
-        [int]$Column
-    )
-
-    if (-not $script:IsGitHubActions) {
-        Write-ErrorMessage -ErrorType 'ERROR' -Message $Message
-        return
-    }
-
-    $annotation = '::error'
-    $params = @()
-    if ($File) { $params += "file=$File" }
-    if ($Line -gt 0) { $params += "line=$Line" }
-    if ($Column -gt 0) { $params += "col=$Column" }
-    
-    if ($params.Count -gt 0) {
-        $annotation += " $($params -join ',')"
-    }
-    $annotation += "::$Message"
-    
-    Write-Host $annotation
 }
 
 # ============================================================================
@@ -497,7 +601,13 @@ function Write-BuildSummary {
     }
 
     if ($Duration) {
-        $durationStr = '{0:mm}m {0:ss}s' -f $Duration
+        # Not '{0:mm}m {0:ss}s': that drops hours and shows minutes modulo 60.
+        $durationStr = if ($Duration.TotalHours -ge 1) {
+            '{0}h {1:00}m {2:00}s' -f [int]$Duration.TotalHours, $Duration.Minutes, $Duration.Seconds
+        }
+        else {
+            '{0}m {1:00}s' -f $Duration.Minutes, $Duration.Seconds
+        }
         Write-StatusInfo -Type 'Duration' -Message $durationStr
     }
 
